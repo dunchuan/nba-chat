@@ -40,3 +40,9 @@ MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
 
 模型名和接口地址均可通过环境变量覆盖，API Key 只保存在后端，不会发送到浏览器。
+
+## 许可证与权利声明
+
+本项目源代码采用 [MIT License](LICENSE) 开源。
+
+本项目与 NBA、NBA 各球队及其关联机构无隶属、授权或合作关系。NBA 相关名称、商标、数据和内容归各自权利人所有；MIT License 仅适用于本仓库中由项目作者提供的源代码，不授予任何第三方商标、赛事内容或数据的使用权。
