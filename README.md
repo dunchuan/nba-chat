@@ -31,11 +31,11 @@ uvicorn app.main:app --reload
 
 ## 模型配置
 
-默认使用阿里云百炼的 OpenAI 兼容接口和 `qwen-plus` 模型：
+默认使用阿里云百炼的 OpenAI 兼容接口和 `qwen3.7-plus` 模型：
 
 ```env
 DASHSCOPE_API_KEY=sk-你的密钥
-MODEL_NAME=qwen-plus
+MODEL_NAME=qwen3.7-plus
 MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
 

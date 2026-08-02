@@ -10,7 +10,7 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.11
       - key: MODEL_NAME
-        value: qwen-plus
+        value: qwen3.7-plus
       - key: MODEL_BASE_URL
         value: https://dashscope.aliyuncs.com/compatible-mode/v1
       - key: DASHSCOPE_API_KEY

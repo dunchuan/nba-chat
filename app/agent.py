@@ -40,7 +40,7 @@ def build_graph():
         return None
 
     model = ChatOpenAI(
-        model=os.getenv("MODEL_NAME", "qwen-plus"),
+        model=os.getenv("MODEL_NAME", "qwen3.7-plus"),
         api_key=api_key,
         base_url=os.getenv(
             "MODEL_BASE_URL",
