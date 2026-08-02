@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain_core.messages import SystemMessage
@@ -11,7 +12,8 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from dotenv import load_dotenv
 
 
-load_dotenv()
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=ENV_FILE, override=True)
 
 
 SYSTEM_PROMPT = """你是 Pocket Agent，一个简洁、可靠的中文 AI 助手。
