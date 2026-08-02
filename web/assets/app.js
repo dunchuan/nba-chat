@@ -2,6 +2,7 @@ const form = document.querySelector("#chat-form");
 const input = document.querySelector("#message");
 const sendButton = document.querySelector("#send");
 const chat = document.querySelector("#chat");
+const workspace = document.querySelector(".workspace");
 const intro = document.querySelector("#intro");
 const statusDot = document.querySelector("#status-dot");
 const statusText = document.querySelector("#status-text");
@@ -16,6 +17,19 @@ localStorage.setItem("pocket-agent-thread", state.threadId);
 
 function persist() {
   localStorage.setItem("pocket-agent-messages", JSON.stringify(state.messages));
+}
+
+function scrollToLatest() {
+  const scroll = () => {
+    workspace.scrollTo({
+      top: workspace.scrollHeight,
+      behavior: "smooth",
+    });
+  };
+
+  requestAnimationFrame(scroll);
+  setTimeout(scroll, 50);
+  setTimeout(scroll, 250);
 }
 
 function addMessage(role, content, save = true) {
@@ -33,7 +47,6 @@ function addMessage(role, content, save = true) {
   article.append(label, text);
   chat.append(article);
   intro.hidden = true;
-  article.scrollIntoView({ behavior: "smooth", block: "end" });
 
   if (save) {
     state.messages.push({ role, content });
@@ -65,6 +78,7 @@ async function submitMessage(message) {
 
   const pending = addMessage("assistant", "正在思考…", false);
   pending.classList.add("pending");
+  scrollToLatest();
 
   try {
     const response = await fetch("/api/chat", {
@@ -76,6 +90,7 @@ async function submitMessage(message) {
     if (!response.ok) throw new Error(data.detail || "请求失败");
     pending.remove();
     addMessage("assistant", data.answer);
+    scrollToLatest();
   } catch (error) {
     pending.querySelector(".message-text").textContent = error.message;
     pending.classList.remove("pending");
@@ -119,4 +134,3 @@ document.querySelector("#new-chat").addEventListener("click", () => {
 });
 
 checkHealth();
-
