@@ -320,7 +320,7 @@ authForm.addEventListener("submit", async (event) => {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || "操作失败");
     state.user = data;
-    state.messages = [];
+    resetConversation();
     updateAccountButton();
     hideAuth();
     statusText.textContent = "NBA Chat 在线";
