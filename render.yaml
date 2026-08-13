@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: pocket-agent-demo
+    name: nba-chat
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -11,7 +11,29 @@ services:
         value: 3.12.11
       - key: MODEL_NAME
         value: qwen3.7-plus
+      - key: NATIVE_TOOL_CALLING
+        value: "false"
       - key: MODEL_BASE_URL
         value: https://dashscope.aliyuncs.com/compatible-mode/v1
+      - key: FACTUAL_MODEL_NAME
+        value: qwen3.6-flash
+      - key: FACTUAL_MAX_COMPLETION_TOKENS
+        value: "500"
+      - key: PLAYER_STATS_MAX_COMPLETION_TOKENS
+        value: "1800"
+      - key: LIGHT_ANALYSIS_MAX_COMPLETION_TOKENS
+        value: "2000"
+      - key: ANALYSIS_MAX_COMPLETION_TOKENS
+        value: "3000"
+      - key: BOX_SCORE_FIELDS
+        value: player_name,team,minutes,pts,reb,ast
       - key: DASHSCOPE_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: LANGSMITH_TRACING
+        value: "false"
+      - key: LANGSMITH_PROJECT
+        value: nba-chat
+      - key: LANGSMITH_API_KEY
         sync: false

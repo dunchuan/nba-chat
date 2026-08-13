@@ -1,4 +1,4 @@
-# Pocket Agent Demo
+# NBA Chat
 
 一个可部署为单一公开链接的 FastAPI + LangGraph AI Agent Demo。FastAPI 同时提供前端静态页面与后端 API，LangGraph 使用 `InMemorySaver` 保存当前 Python 进程内的多轮会话状态。
 

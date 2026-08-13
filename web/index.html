@@ -3,47 +3,61 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="由 FastAPI 与 LangGraph 驱动的轻量 AI Agent 演示" />
-    <title>Pocket Agent · 随时展开思路</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=8" />
+    <meta name="description" content="NBA Chat：面向中文球迷的 NBA 智能问答助手" />
+    <title>NBA Chat · NBA 智能问答助手</title>
+    <link rel="icon" type="image/x-icon" href="/assets/nba-favicon.ico" />
+    <link rel="stylesheet" href="/assets/styles.css?v=12" />
   </head>
   <body>
     <div class="shell">
       <header class="topbar">
-        <a class="brand" href="/" aria-label="Pocket Agent 首页">
-          <span class="brand-mark">P</span>
-          <span>Pocket Agent</span>
+        <a class="brand" href="/" aria-label="NBA Chat 首页">
+          <span class="brand-mark"><img src="/assets/nba-logo.svg" alt="NBA" /></span>
+          <span>NBA Chat</span>
         </a>
         <div class="status"><span class="status-dot" id="status-dot"></span><span id="status-text">连接中</span></div>
+        <button class="account-button" id="account-button" type="button">登录</button>
       </header>
 
       <main class="workspace">
         <section class="intro" id="intro">
-          <p class="eyebrow">FASTAPI × LANGGRAPH</p>
-          <h1>把一个问题，<br /><em>慢慢想清楚。</em></h1>
-          <p class="lede">一个会使用工具、保留当前会话上下文的轻量 Agent。试着问它一个问题，或让它查询某地时间。</p>
+          <p class="eyebrow">NBA INTELLIGENCE · 中文问答</p>
+          <h1>把比赛数据，<br /><em>讲得更清楚。</em></h1>
+          <p class="lede">面向中文球迷的 NBA 智能问答助手。查询赛程、赛果、球员数据、历史纪录，以及最新的新闻与伤病信息。</p>
           <div class="suggestions" aria-label="问题建议">
-            <button data-prompt="现在上海几点？">现在上海几点？</button>
-            <button data-prompt="用三个要点解释什么是 LangGraph。">解释 LangGraph</button>
-            <button data-prompt="帮我制定一个学习 FastAPI 的 7 天计划。">制定学习计划</button>
+            <button data-prompt="NBA 最近有什么重要新闻？">NBA 最新新闻</button>
+            <button data-prompt="今天 NBA 有没有比赛？">查询今日赛程</button>
+            <button data-prompt="某位球员最近的伤病情况如何？">查询伤病动态</button>
           </div>
         </section>
 
         <section class="chat" id="chat" aria-live="polite" aria-label="对话记录"></section>
       </main>
 
+      <section class="auth-panel" id="auth-panel" hidden>
+        <form id="auth-form" class="auth-card">
+          <h2 id="auth-title">登录 NBA Chat</h2>
+          <input id="auth-username" autocomplete="username" minlength="3" maxlength="40" placeholder="用户名" required />
+          <input id="auth-password" type="password" autocomplete="current-password" minlength="6" maxlength="128" placeholder="密码（至少 6 位）" required />
+          <p class="auth-error" id="auth-error" role="alert"></p>
+          <button class="auth-submit" type="submit">登录</button>
+          <p class="auth-hint">Demo 环境提供 3 个固定账号</p>
+        </form>
+      </section>
+
       <footer class="composer-wrap">
         <form class="composer" id="chat-form">
+          <button class="stop" id="stop" type="button" aria-label="停止生成" title="停止生成" hidden>停止</button>
           <label class="sr-only" for="message">输入消息</label>
           <textarea id="message" rows="1" maxlength="8000" placeholder="输入你想探索的问题…" required></textarea>
           <button class="send" id="send" type="submit" aria-label="发送消息">↑</button>
         </form>
         <div class="footer-row">
-          <span>演示服务器休眠后，Agent 记忆会被清除</span>
+          <span>默认使用北京时间 · 数据会随来源更新</span>
           <button id="new-chat" type="button">新对话</button>
         </div>
       </footer>
     </div>
-    <script src="/assets/app.js?v=8" defer></script>
+    <script src="/assets/app.js?v=15" defer></script>
   </body>
 </html>

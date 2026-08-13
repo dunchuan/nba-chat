@@ -23,7 +23,7 @@ def main() -> int:
 
     load_dotenv(dotenv_path=ENV_FILE, override=True)
 
-    api_key = "sk-a884f27fcb9a49598e9e31418be1d637"
+    api_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
     base_url = os.getenv(
         "MODEL_BASE_URL",
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
