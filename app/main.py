@@ -2,8 +2,11 @@ from pathlib import Path
 import asyncio
 import json
 import os
+import socket
+import time
 import uuid
 
+import httpx
 from fastapi import Cookie, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -69,6 +72,70 @@ def _stream_event(event_type: str, **payload: object) -> str:
     ) + "\n"
 
 
+def _probe_host(host: str) -> dict[str, object]:
+    result: dict[str, object] = {"host": host}
+    try:
+        addresses = sorted({item[4][0] for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)})
+        result["dns"] = {"ok": True, "addresses": addresses}
+    except Exception as exc:
+        result["dns"] = {"ok": False, "error": type(exc).__name__, "message": str(exc)}
+        return result
+
+    started = time.perf_counter()
+    try:
+        with socket.create_connection((host, 443), timeout=10):
+            result["tcp"] = {
+                "ok": True,
+                "elapsed_seconds": round(time.perf_counter() - started, 3),
+            }
+    except Exception as exc:
+        result["tcp"] = {
+            "ok": False,
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
+            "error": type(exc).__name__,
+            "message": str(exc),
+        }
+
+    started = time.perf_counter()
+    try:
+        with httpx.Client(timeout=15, follow_redirects=False, trust_env=True) as client:
+            response = client.get(f"https://{host}/")
+        result["https"] = {
+            "ok": True,
+            "status_code": response.status_code,
+            "content_type": response.headers.get("content-type", ""),
+            "bytes": len(response.content),
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
+        }
+    except Exception as exc:
+        result["https"] = {
+            "ok": False,
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
+            "error": type(exc).__name__,
+            "message": str(exc),
+        }
+    return result
+
+
+def _run_nba_connectivity_diagnostic(game_id: str) -> dict[str, object]:
+    result: dict[str, object] = {
+        "source": "nba_api",
+        "game_id": game_id,
+        "checks": [_probe_host("stats.nba.com"), _probe_host("cdn.nba.com")],
+    }
+    started = time.perf_counter()
+    try:
+        raw = lookup_game_time_data.invoke(game_id)
+        try:
+            result["nba_api"] = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            result["nba_api"] = {"raw": str(raw)}
+    except Exception as exc:
+        result["nba_api"] = {"ok": False, "error": type(exc).__name__, "message": str(exc)}
+    result["nba_api_elapsed_seconds"] = round(time.perf_counter() - started, 3)
+    return result
+
+
 @app.get("/api/health")
 async def health():
     return {
@@ -114,6 +181,16 @@ async def debug_game_time(game_id: str):
         return json.loads(result)
     except ValueError:
         return {"source": "nba_api", "game_id": game_id, "raw": result}
+
+
+@app.get("/api/debug/nba-connectivity")
+async def debug_nba_connectivity(
+    game_id: str = "0049900088",
+    nba_session: str | None = Cookie(default=None),
+):
+    """Diagnose Render DNS, TCP, HTTPS, and the real NBA API call."""
+    require_user(nba_session)
+    return await asyncio.to_thread(_run_nba_connectivity_diagnostic, game_id)
 
 
 @app.post("/api/chat")
