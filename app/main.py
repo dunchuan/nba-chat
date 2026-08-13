@@ -34,7 +34,7 @@ async def utf8_json_response(request, call_next):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
-    thread_id: str = Field(min_length=1, max_length=255)
+    thread_id: str = Field(default="", max_length=255)
 
 
 class Credentials(BaseModel):
@@ -121,6 +121,9 @@ async def chat(payload: ChatRequest, nba_session: str | None = Cookie(default=No
     user = require_user(nba_session)
     if graph is None:
         raise HTTPException(status_code=503, detail="DASHSCOPE_API_KEY 未配置")
+    # Older browser tabs may submit before the client has initialized a
+    # thread ID. Keep the API resilient and start a fresh conversation.
+    thread_id = payload.thread_id.strip() or uuid.uuid4().hex
 
     async def stream_response():
         final_result = {}
@@ -133,10 +136,10 @@ async def chat(payload: ChatRequest, nba_session: str | None = Cookie(default=No
                     # LangGraph super-step safety limit. This is separate
                     # from the per-request ReAct budget in native_agent.py.
                     "recursion_limit": max(24, int(os.getenv("LANGGRAPH_RECURSION_LIMIT", "40"))),
-                    "configurable": {"thread_id": f"user-{user['id']}:{payload.thread_id}"},
+                    "configurable": {"thread_id": f"user-{user['id']}:{thread_id}"},
                     "tags": ["nba-chat", "web-chat"],
                     "metadata": {
-                        "thread_id": payload.thread_id,
+                        "thread_id": thread_id,
                         "user_id": user["id"],
                         "input_length": len(payload.message.strip()),
                     },
@@ -155,7 +158,7 @@ async def chat(payload: ChatRequest, nba_session: str | None = Cookie(default=No
             answer = _chunk_text(messages[-1]) if messages else streamed_text
             yield _stream_event(
                 "metadata",
-                thread_id=payload.thread_id,
+                thread_id=thread_id,
                 intent=str(final_result.get("intent") or "general"),
                 resolved_query=str(final_result.get("resolved_query") or ""),
                 analysis_level=str(final_result.get("analysis_level") or "none"),
