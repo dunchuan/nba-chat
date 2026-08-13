@@ -78,8 +78,8 @@ Live 测试会消耗模型和第三方 API 配额，并可能受网络、代理�
 | --- | --- |
 | `DASHSCOPE_API_KEY` | Qwen 模型 API Key |
 | `MODEL_NAME` | 主分析模型，默认 `qwen3.7-plus` |
-| `FACTUAL_MODEL_NAME` | 客观事实整理模型，默认 `qwen3.6-flash` |
 | `MODEL_BASE_URL` | OpenAI 兼容模型服务地址 |
+| `NATIVE_MAX_COMPLETION_TOKENS` | ReAct Agent 单次模型输出上限 |
 | `TAVILY_API_KEY` | 当前资讯联网搜索，可选 |
 | `LANGSMITH_TRACING` | 是否启用 LangSmith 追踪 |
 | `LANGSMITH_PROJECT` | LangSmith 项目名称 |

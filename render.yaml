@@ -11,22 +11,16 @@ services:
         value: 3.12.11
       - key: MODEL_NAME
         value: qwen3.7-plus
-      - key: NATIVE_TOOL_CALLING
-        value: "false"
       - key: MODEL_BASE_URL
         value: https://dashscope.aliyuncs.com/compatible-mode/v1
-      - key: FACTUAL_MODEL_NAME
-        value: qwen3.6-flash
-      - key: FACTUAL_MAX_COMPLETION_TOKENS
-        value: "500"
-      - key: PLAYER_STATS_MAX_COMPLETION_TOKENS
-        value: "1800"
-      - key: LIGHT_ANALYSIS_MAX_COMPLETION_TOKENS
-        value: "2000"
-      - key: ANALYSIS_MAX_COMPLETION_TOKENS
-        value: "3000"
-      - key: BOX_SCORE_FIELDS
-        value: player_name,team,minutes,pts,reb,ast
+      - key: REACT_MAX_STEPS
+        value: "12"
+      - key: LANGGRAPH_RECURSION_LIMIT
+        value: "40"
+      - key: NATIVE_MAX_COMPLETION_TOKENS
+        value: "6000"
+      - key: SQLITE_PATH
+        value: ./data/nba_chat.sqlite3
       - key: DASHSCOPE_API_KEY
         sync: false
       - key: TAVILY_API_KEY
