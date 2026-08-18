@@ -38,8 +38,23 @@ function persist() {
   localStorage.setItem(userStorageKey(), JSON.stringify(state.messages));
 }
 
+function newThreadId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  return `thread-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function resetConversation() {
-  state.threadId = crypto.randomUUID();
+  state.threadId = newThreadId();
   state.messages = [];
   localStorage.setItem("nba-chat-thread", state.threadId);
   persist();
@@ -190,7 +205,12 @@ async function checkHealth() {
     const response = await fetch("/api/health");
     const data = await response.json();
     statusDot.classList.toggle("ready", data.agent_ready);
-    const authenticated = await loadUser();
+    const authenticated = data.auth_required ? await loadUser() : true;
+    if (!data.auth_required) {
+      state.user = { id: "guest", username: "guest" };
+      accountButton.hidden = true;
+      hideAuth();
+    }
     if (!authenticated) {
       updateAccountButton();
       showAuth();
@@ -202,7 +222,7 @@ async function checkHealth() {
       resetConversation();
       localStorage.setItem("nba-chat-server-instance", data.server_instance_id);
     } else {
-      state.threadId = localStorage.getItem("nba-chat-thread") || crypto.randomUUID();
+      state.threadId = localStorage.getItem("nba-chat-thread") || newThreadId();
       state.messages = JSON.parse(localStorage.getItem(userStorageKey()) || "[]");
       localStorage.setItem("nba-chat-thread", state.threadId);
       state.messages.forEach(({ role, content }) => addMessage(role, content, false));

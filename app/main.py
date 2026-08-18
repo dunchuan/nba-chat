@@ -23,6 +23,7 @@ WEB_DIR = BASE_DIR / "web"
 app = FastAPI(title="NBA Chat", version="1.0.0")
 app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
 SERVER_INSTANCE_ID = uuid.uuid4().hex
+AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "false").strip().lower() == "true"
 init_auth_db()
 
 
@@ -46,6 +47,8 @@ class Credentials(BaseModel):
 
 
 def require_user(session: str | None) -> dict[str, object]:
+    if not AUTH_REQUIRED:
+        return {"id": "guest", "username": "guest"}
     user = user_from_session(session)
     if not user:
         raise HTTPException(status_code=401, detail="请先登录")
@@ -143,6 +146,7 @@ async def health():
         "agent_ready": graph is not None,
         "langsmith_tracing": os.getenv("LANGSMITH_TRACING", "false").lower() == "true",
         "langsmith_project": os.getenv("LANGSMITH_PROJECT", "default"),
+        "auth_required": AUTH_REQUIRED,
         "server_instance_id": SERVER_INSTANCE_ID,
     }
 
