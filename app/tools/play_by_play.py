@@ -1,6 +1,7 @@
 """Play-by-play tool."""
 import json
 from langchain_core.tools import tool
+from app.nba_client import run_nba_api
 from app.tools.support import cached, dump, save
 
 @tool
@@ -17,7 +18,11 @@ def lookup_play_by_play_data(game_id: str, start_period: str = "0", end_period: 
         return hit
     try:
         from nba_api.stats.endpoints import playbyplayv3
-        frame = playbyplayv3.PlayByPlayV3(game_id=str(game_id), timeout=20).get_data_frames()[0]
+        frame = run_nba_api(
+            lambda: playbyplayv3.PlayByPlayV3(
+                game_id=str(game_id), timeout=20
+            ).get_data_frames()[0]
+        )
         events = frame.to_dict(orient="records") if frame is not None else []
         if start_period != "0":
             end = end_period if end_period != "0" else start_period

@@ -6,6 +6,7 @@ import re
 from langchain_core.tools import tool
 
 from app.cache.manager import cache_get, cache_items, cache_set
+from app.nba_client import run_nba_api
 
 
 def _summary(namespace: str, key: str, raw: str) -> dict[str, object]:
@@ -68,12 +69,14 @@ def _lookup_game_log(query: str, season_type: str) -> str:
         return json.dumps(payload, ensure_ascii=False)
     try:
         from nba_api.stats.endpoints import leaguegamelog
-        frame = leaguegamelog.LeagueGameLog(
-            season=season,
-            season_type_all_star=season_type,
-            player_or_team_abbreviation="T",
-            timeout=20,
-        ).get_data_frames()[0]
+        frame = run_nba_api(
+            lambda: leaguegamelog.LeagueGameLog(
+                season=season,
+                season_type_all_star=season_type,
+                player_or_team_abbreviation="T",
+                timeout=20,
+            ).get_data_frames()[0]
+        )
         rows = frame.to_dict(orient="records") if frame is not None and not frame.empty else []
     except Exception as exc:
         return json.dumps({"source": "nba_api", "query": query, "season": season, "matches": [], "error": type(exc).__name__}, ensure_ascii=False)

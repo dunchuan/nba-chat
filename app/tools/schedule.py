@@ -2,6 +2,7 @@
 import json
 import re
 from langchain_core.tools import tool
+from app.nba_client import run_nba_api
 from app.cache.manager import cache_get, cache_set
 from app.tools.support import cached, dump, save, beijing_time
 
@@ -34,7 +35,9 @@ def lookup_series_data(query: str) -> str:
         return json.dumps(payload, ensure_ascii=False, default=str)
     try:
         from nba_api.stats.endpoints import scheduleleaguev2
-        frames = scheduleleaguev2.ScheduleLeagueV2(season=season, timeout=20).get_data_frames()
+        frames = run_nba_api(
+            lambda: scheduleleaguev2.ScheduleLeagueV2(season=season, timeout=20).get_data_frames()
+        )
         records = []
         finals_requested = any(token in query.lower() for token in ("nba finals", "finals", "总决赛", "总决"))
         game_match = re.search(r"(?:g|game|第)\s*(\d+)", query.lower())
@@ -92,7 +95,9 @@ def lookup_game_time_data(game_id: str, season: str = "") -> str:
         hit = cached("game-time", key)
         if hit:
             return hit
-        frames = scheduleleaguev2.ScheduleLeagueV2(season=season, timeout=20).get_data_frames()
+        frames = run_nba_api(
+            lambda: scheduleleaguev2.ScheduleLeagueV2(season=season, timeout=20).get_data_frames()
+        )
         for frame in frames:
             column = next((c for c in ("gameId", "GAME_ID") if c in frame.columns), None)
             if column:
@@ -120,7 +125,11 @@ def lookup_standings(year: int, season_type: str = "Regular Season") -> str:
         return hit
     try:
         from nba_api.stats.endpoints import leaguestandingsv3
-        frame=leaguestandingsv3.LeagueStandingsV3(season=season, season_type=season_type, timeout=20).get_data_frames()[0]
+        frame = run_nba_api(
+            lambda: leaguestandingsv3.LeagueStandingsV3(
+                season=season, season_type=season_type, timeout=20
+            ).get_data_frames()[0]
+        )
         return save("standings", key, dump({"source":"nba_api","season":season,"standings":frame.to_dict(orient="records")}))
     except Exception as exc:
         return save("standings", key, dump({"source":"nba_api","season":season,"standings":[],"error":type(exc).__name__}))
