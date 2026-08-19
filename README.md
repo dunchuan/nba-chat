@@ -1,4 +1,5 @@
 # NBA Chat
+访问 <https://nbachat.top>
 
 NBA Chat 是一个基于 FastAPI、LangGraph 和 Qwen 的 NBA ReAct Agent Demo。
 它可以根据用户问题自主选择 NBA 数据工具、联网搜索工具和分析模型，并支持多轮对话、缓存复用、流式输出和登录。
