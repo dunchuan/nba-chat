@@ -99,6 +99,7 @@ textarea::placeholder { color: #939b95; }
 .stop:hover { background: #a3443d; color: white; }
 .stop[hidden] { display: none; }
 .footer-row { width: min(1120px, 94vw); margin: 9px auto 0; display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
+.legal-note { width: min(1120px, 94vw); margin: 5px auto 0; color: var(--muted); font-size: 10px; line-height: 1.45; opacity: .82; }
 #new-chat { padding: 7px 13px; border: 1px solid rgba(30,103,68,.28); border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 650; transition: .2s ease; }
 #new-chat::before { content: "+"; display: inline-block; margin-right: 5px; font-size: 16px; font-weight: 500; line-height: 10px; vertical-align: -1px; }
 #new-chat:hover { border-color: var(--accent); background: var(--accent); color: white; transform: translateY(-1px); }

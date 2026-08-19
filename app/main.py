@@ -1,13 +1,14 @@
 from pathlib import Path
 import asyncio
 import json
+import logging
 import os
 import socket
 import time
 import uuid
 
 import httpx
-from fastapi import Cookie, FastAPI, HTTPException, Response
+from fastapi import Cookie, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
@@ -21,6 +22,9 @@ from app.auth import authenticate, create_session, create_user, delete_session, 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
 app = FastAPI(title="NBA Chat", version="1.0.0")
+# Uvicorn configures this logger at INFO level and sends it to container stdout.
+# Reusing it ensures audit records appear in ``docker compose logs``.
+logger = logging.getLogger("uvicorn.error")
 app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
 SERVER_INSTANCE_ID = uuid.uuid4().hex
 AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "false").strip().lower() == "true"
@@ -73,6 +77,21 @@ def _stream_event(event_type: str, **payload: object) -> str:
         ensure_ascii=False,
         default=str,
     ) + "\n"
+
+
+def _client_ip(request: Request) -> str:
+    """Return the client IP supplied by a trusted proxy, or the direct peer."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+
+def _audit_log(event: str, **fields: object) -> None:
+    """Emit one JSON log line so Docker logs can be searched reliably."""
+    logger.info("%s", json.dumps({"event": event, **fields}, ensure_ascii=False, default=str))
 
 
 def _probe_host(host: str) -> dict[str, object]:
@@ -198,20 +217,34 @@ async def debug_nba_connectivity(
 
 
 @app.post("/api/chat")
-async def chat(payload: ChatRequest, nba_session: str | None = Cookie(default=None)):
+async def chat(
+    payload: ChatRequest,
+    request: Request,
+    nba_session: str | None = Cookie(default=None),
+):
     user = require_user(nba_session)
     if graph is None:
         raise HTTPException(status_code=503, detail="DASHSCOPE_API_KEY 未配置")
     # Older browser tabs may submit before the client has initialized a
     # thread ID. Keep the API resilient and start a fresh conversation.
     thread_id = payload.thread_id.strip() or uuid.uuid4().hex
+    message = payload.message.strip()
+    client_ip = _client_ip(request)
+    started_at = time.perf_counter()
+    audit_fields = {
+        "client_ip": client_ip,
+        "user_id": str(user["id"]),
+        "username": str(user["username"]),
+        "thread_id": thread_id,
+    }
+    _audit_log("chat_request", **audit_fields, message=message, input_length=len(message))
 
     async def stream_response():
         final_result = {}
         streamed_text = ""
         try:
             async for event in graph.astream_events(
-                {"messages": [HumanMessage(content=payload.message.strip())]},
+                {"messages": [HumanMessage(content=message)]},
                 version="v2",
                 config={
                     # LangGraph super-step safety limit. This is separate
@@ -222,7 +255,7 @@ async def chat(payload: ChatRequest, nba_session: str | None = Cookie(default=No
                     "metadata": {
                         "thread_id": thread_id,
                         "user_id": user["id"],
-                        "input_length": len(payload.message.strip()),
+                        "input_length": len(message),
                     },
                 },
             ):
@@ -255,8 +288,29 @@ async def chat(payload: ChatRequest, nba_session: str | None = Cookie(default=No
                 cache_hit=bool(final_result.get("cache_hit")),
                 answer=answer,
             )
+            _audit_log(
+                "chat_completed",
+                **audit_fields,
+                elapsed_seconds=round(time.perf_counter() - started_at, 3),
+                intent=str(final_result.get("intent") or "general"),
+                analysis_level=str(final_result.get("analysis_level") or "none"),
+                retrieval_game_id=str(final_result.get("retrieval_game_id") or ""),
+                cache_hit=bool(final_result.get("cache_hit")),
+                nba_api_game_used=bool(final_result.get("nba_api_game_used")),
+                player_data_used=bool(final_result.get("player_data_used")),
+                game_time_used=bool(final_result.get("game_time_used")),
+                play_by_play_used=bool(final_result.get("play_by_play_used")),
+                web_search_used=bool(final_result.get("web_search_used")),
+            )
             yield _stream_event("done")
         except Exception as exc:
+            _audit_log(
+                "chat_failed",
+                **audit_fields,
+                elapsed_seconds=round(time.perf_counter() - started_at, 3),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
             yield _stream_event("error", message=f"Agent 调用失败：{exc}")
 
     return StreamingResponse(
