@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import socket
+import sqlite3
 import time
 import uuid
 
@@ -16,7 +17,16 @@ from pydantic import BaseModel, Field
 
 from app.native_agent import graph
 from app.tools.schedule import lookup_game_time_data
-from app.auth import authenticate, create_session, create_user, delete_session, init_auth_db, user_from_session
+from app.auth import (
+    authenticate,
+    create_session,
+    create_user,
+    delete_session,
+    init_auth_db,
+    normalize_username,
+    user_from_session,
+    username_for_user_id,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -27,7 +37,9 @@ app = FastAPI(title="NBA Chat", version="1.0.0")
 logger = logging.getLogger("uvicorn.error")
 app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
 SERVER_INSTANCE_ID = uuid.uuid4().hex
-AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "false").strip().lower() == "true"
+AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "true").strip().lower() == "true"
+REGISTRATION_ENABLED = os.getenv("REGISTRATION_ENABLED", "true").strip().lower() == "true"
+SESSION_MAX_AGE = max(3600, int(os.getenv("SESSION_MAX_AGE", str(7 * 24 * 3600))))
 init_auth_db()
 
 
@@ -57,6 +69,28 @@ def require_user(session: str | None) -> dict[str, object]:
     if not user:
         raise HTTPException(status_code=401, detail="请先登录")
     return user
+
+
+def _cookie_is_secure(request: Request) -> bool:
+    configured = os.getenv("SESSION_COOKIE_SECURE", "auto").strip().lower()
+    if configured in {"true", "1", "yes"}:
+        return True
+    if configured in {"false", "0", "no"}:
+        return False
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    return forwarded_proto == "https" or request.url.scheme == "https"
+
+
+def _set_session_cookie(response: Response, request: Request, token: str) -> None:
+    response.set_cookie(
+        "nba_session",
+        token,
+        httponly=True,
+        secure=_cookie_is_secure(request),
+        samesite="lax",
+        max_age=SESSION_MAX_AGE,
+        path="/",
+    )
 
 
 def _chunk_text(chunk: object) -> str:
@@ -166,23 +200,36 @@ async def health():
         "langsmith_tracing": os.getenv("LANGSMITH_TRACING", "false").lower() == "true",
         "langsmith_project": os.getenv("LANGSMITH_PROJECT", "default"),
         "auth_required": AUTH_REQUIRED,
+        "registration_enabled": REGISTRATION_ENABLED,
         "server_instance_id": SERVER_INSTANCE_ID,
     }
 
 
 @app.post("/api/auth/register")
-async def register(credentials: Credentials, response: Response):
-    raise HTTPException(status_code=403, detail="Demo 环境暂不开放注册")
+async def register(credentials: Credentials, request: Request, response: Response):
+    if not REGISTRATION_ENABLED:
+        raise HTTPException(status_code=403, detail="当前环境暂未开放注册")
+    username = normalize_username(credentials.username)
+    try:
+        user_id = await asyncio.to_thread(create_user, username, credentials.password)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="该用户名已被使用") from exc
+    token = await asyncio.to_thread(create_session, user_id, SESSION_MAX_AGE)
+    _set_session_cookie(response, request, token)
+    _audit_log("user_registered", client_ip=_client_ip(request), user_id=user_id, username=username)
+    return {"id": user_id, "username": username}
 
 
 @app.post("/api/auth/login")
-async def login(credentials: Credentials, response: Response):
+async def login(credentials: Credentials, request: Request, response: Response):
     user_id = await asyncio.to_thread(authenticate, credentials.username, credentials.password)
     if not user_id:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
-    token = await asyncio.to_thread(create_session, user_id)
-    response.set_cookie("nba_session", token, httponly=True, samesite="lax", max_age=7 * 24 * 3600)
-    return {"id": user_id, "username": credentials.username}
+    token = await asyncio.to_thread(create_session, user_id, SESSION_MAX_AGE)
+    _set_session_cookie(response, request, token)
+    username = await asyncio.to_thread(username_for_user_id, user_id)
+    _audit_log("user_login", client_ip=_client_ip(request), user_id=user_id, username=username)
+    return {"id": user_id, "username": username}
 
 
 @app.get("/api/auth/me")
@@ -191,9 +238,9 @@ async def me(nba_session: str | None = Cookie(default=None)):
 
 
 @app.post("/api/auth/logout")
-async def logout(response: Response, nba_session: str | None = Cookie(default=None)):
+async def logout(request: Request, response: Response, nba_session: str | None = Cookie(default=None)):
     await asyncio.to_thread(delete_session, nba_session)
-    response.delete_cookie("nba_session")
+    response.delete_cookie("nba_session", path="/", secure=_cookie_is_secure(request), samesite="lax")
     return {"ok": True}
 
 

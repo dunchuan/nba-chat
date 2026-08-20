@@ -35,7 +35,9 @@ button { cursor: pointer; }
 .brand-mark { position: relative; display: block; flex: 0 0 30px; width: 30px; height: 30px; overflow: hidden; border-radius: 5px; background: transparent; }
 .brand-mark img { position: absolute; inset: 0 auto auto 0; display: block; width: 51px; max-width: none; height: 30px; mix-blend-mode: multiply; }
 .status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
-.status, .account-button { display: none; }
+.status { display: none; }
+.account-button { display: inline-flex; align-items: center; }
+.account-button[hidden] { display: none; }
 .account-button { margin-left: 16px; padding: 7px 13px; border: 1px solid rgba(30,103,68,.28); border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 650; }
 .account-button:hover { background: var(--accent); color: white; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #c38c45; box-shadow: 0 0 0 4px rgba(195,140,69,.12); }
@@ -83,8 +85,14 @@ h1 em { color: var(--accent); font-weight: 500; }
 .auth-panel[hidden] { display: none; }
 .auth-card { width: min(360px, 100%); display: grid; gap: 12px; padding: 26px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: 0 18px 60px rgba(32,48,39,.14); }
 .auth-card h2 { margin: 0 0 8px; font-family: Georgia, serif; font-weight: 500; }
+.auth-description { margin: -8px 0 4px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 12px; background: #eceee9; }
+.auth-tab { padding: 8px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-weight: 650; }
+.auth-tab.active { background: var(--panel); color: var(--accent); box-shadow: 0 2px 8px rgba(32,48,39,.08); }
+.auth-tab[hidden] { display: none; }
 .auth-card input { width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: white; color: var(--ink); outline-color: var(--accent); }
 .auth-submit { padding: 10px; border: 0; border-radius: 10px; background: var(--accent); color: white; font-weight: 700; }
+.auth-submit:disabled { opacity: .55; cursor: wait; }
 .auth-hint { margin: 0; color: var(--muted); font-size: 12px; text-align: center; }
 .auth-error { min-height: 18px; margin: 0; color: #a3443d; font-size: 12px; }
 

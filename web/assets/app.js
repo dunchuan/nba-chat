@@ -14,6 +14,12 @@ const authTitle = document.querySelector("#auth-title");
 const authError = document.querySelector("#auth-error");
 const authUsername = document.querySelector("#auth-username");
 const authPassword = document.querySelector("#auth-password");
+const authConfirmPassword = document.querySelector("#auth-confirm-password");
+const authConfirmGroup = document.querySelector("#auth-confirm-group");
+const authLoginTab = document.querySelector("#auth-login-tab");
+const authRegisterTab = document.querySelector("#auth-register-tab");
+const authDescription = document.querySelector("#auth-description");
+const authSubmit = document.querySelector("#auth-submit");
 
 sendButton.textContent = "发送";
 sendButton.setAttribute("aria-label", "发送消息");
@@ -24,10 +30,16 @@ const state = {
   busy: false,
   controller: null,
   user: null,
+  authMode: "login",
+  registrationEnabled: true,
 };
 
 function userStorageKey() {
   return state.user ? `nba-chat-messages-${state.user.id}` : "nba-chat-messages";
+}
+
+function threadStorageKey() {
+  return state.user ? `nba-chat-thread-${state.user.id}` : "nba-chat-thread";
 }
 
 function updateAccountButton() {
@@ -56,10 +68,19 @@ function newThreadId() {
 function resetConversation() {
   state.threadId = newThreadId();
   state.messages = [];
-  localStorage.setItem("nba-chat-thread", state.threadId);
+  localStorage.setItem(threadStorageKey(), state.threadId);
   persist();
   chat.replaceChildren();
   intro.hidden = false;
+}
+
+function restoreConversation() {
+  state.threadId = localStorage.getItem(threadStorageKey()) || newThreadId();
+  state.messages = JSON.parse(localStorage.getItem(userStorageKey()) || "[]");
+  localStorage.setItem(threadStorageKey(), state.threadId);
+  chat.replaceChildren();
+  state.messages.forEach(({ role, content }) => addMessage(role, content, false));
+  intro.hidden = state.messages.length > 0;
 }
 
 function scrollToLatest() {
@@ -182,14 +203,35 @@ function addMessage(role, content, save = true, webSearchUsed = false, gameDataU
   return article;
 }
 
-function showAuth() {
-  authPanel.hidden = false;
-  authUsername.focus();
-}
-
 function hideAuth() {
   authPanel.hidden = true;
+  accountButton.hidden = false;
   authError.textContent = "";
+}
+
+function setAuthMode(mode) {
+  state.authMode = mode === "register" && state.registrationEnabled ? "register" : "login";
+  const registering = state.authMode === "register";
+  authLoginTab.classList.toggle("active", !registering);
+  authRegisterTab.classList.toggle("active", registering);
+  authLoginTab.setAttribute("aria-selected", String(!registering));
+  authRegisterTab.setAttribute("aria-selected", String(registering));
+  authTitle.textContent = registering ? "注册 NBA Chat" : "登录 NBA Chat";
+  authDescription.textContent = registering
+    ? "创建账号后即可开始独立的 NBA 对话。"
+    : "登录后，对话和 Agent 上下文会按账号隔离。";
+  authSubmit.textContent = registering ? "创建账号" : "登录";
+  authConfirmGroup.hidden = !registering;
+  authConfirmPassword.required = registering;
+  authPassword.autocomplete = registering ? "new-password" : "current-password";
+  authError.textContent = "";
+}
+
+function showAuth(mode = "login") {
+  setAuthMode(mode);
+  accountButton.hidden = true;
+  authPanel.hidden = false;
+  authUsername.focus();
 }
 
 async function loadUser() {
@@ -204,12 +246,14 @@ async function checkHealth() {
   try {
     const response = await fetch("/api/health");
     const data = await response.json();
+    state.registrationEnabled = data.registration_enabled !== false;
+    authRegisterTab.hidden = !state.registrationEnabled;
     statusDot.classList.toggle("ready", data.agent_ready);
     const authenticated = data.auth_required ? await loadUser() : true;
     if (!data.auth_required) {
       state.user = { id: "guest", username: "guest" };
-      accountButton.hidden = true;
       hideAuth();
+      accountButton.hidden = true;
     }
     if (!authenticated) {
       updateAccountButton();
@@ -222,10 +266,7 @@ async function checkHealth() {
       resetConversation();
       localStorage.setItem("nba-chat-server-instance", data.server_instance_id);
     } else {
-      state.threadId = localStorage.getItem("nba-chat-thread") || newThreadId();
-      state.messages = JSON.parse(localStorage.getItem(userStorageKey()) || "[]");
-      localStorage.setItem("nba-chat-thread", state.threadId);
-      state.messages.forEach(({ role, content }) => addMessage(role, content, false));
+      restoreConversation();
     }
     statusText.textContent = data.agent_ready ? "NBA Chat 在线" : "等待配置";
   } catch {
@@ -327,26 +368,52 @@ accountButton.addEventListener("click", async () => {
   showAuth();
 });
 
+authLoginTab.addEventListener("click", () => setAuthMode("login"));
+authRegisterTab.addEventListener("click", () => setAuthMode("register"));
+
 authForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   authError.textContent = "";
-  const endpoint = "/api/auth/login";
+
+  if (state.authMode === "register" && authPassword.value !== authConfirmPassword.value) {
+    authError.textContent = "两次输入的密码不一致";
+    return;
+  }
+
+  authSubmit.disabled = true;
+  const endpoint = state.authMode === "register" ? "/api/auth/register" : "/api/auth/login";
   try {
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: authUsername.value.trim(), password: authPassword.value }),
+      body: JSON.stringify({
+        username: authUsername.value.trim(),
+        password: authPassword.value,
+      }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || "操作失败");
+    if (!response.ok) {
+      const validationMessage = Array.isArray(data.detail)
+        ? data.detail.map((item) => item.msg).filter(Boolean).join("；")
+        : data.detail;
+      throw new Error(validationMessage || "操作失败");
+    }
+
     state.user = data;
-    resetConversation();
+    if (localStorage.getItem(threadStorageKey())) {
+      restoreConversation();
+    } else {
+      resetConversation();
+    }
     updateAccountButton();
     hideAuth();
     statusText.textContent = "NBA Chat 在线";
     authPassword.value = "";
+    authConfirmPassword.value = "";
   } catch (error) {
     authError.textContent = error.message;
+  } finally {
+    authSubmit.disabled = false;
   }
 });
 

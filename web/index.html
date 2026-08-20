@@ -6,7 +6,7 @@
     <meta name="description" content="NBA Chat：面向中文球迷的 NBA 智能问答助手" />
     <title>NBA Chat · NBA 智能问答助手</title>
     <link rel="icon" type="image/x-icon" href="/assets/nba-favicon.ico" />
-    <link rel="stylesheet" href="/assets/styles.css?v=13" />
+    <link rel="stylesheet" href="/assets/styles.css?v=14" />
   </head>
   <body>
     <div class="shell">
@@ -36,12 +36,22 @@
 
       <section class="auth-panel" id="auth-panel" hidden>
         <form id="auth-form" class="auth-card">
+          <div class="auth-tabs" role="tablist" aria-label="账号操作">
+            <button id="auth-login-tab" class="auth-tab active" type="button" role="tab" aria-selected="true">登录</button>
+            <button id="auth-register-tab" class="auth-tab" type="button" role="tab" aria-selected="false">注册</button>
+          </div>
           <h2 id="auth-title">登录 NBA Chat</h2>
-          <input id="auth-username" autocomplete="username" minlength="3" maxlength="40" placeholder="用户名" required />
+          <p class="auth-description" id="auth-description">登录后，对话和 Agent 上下文会按账号隔离。</p>
+          <label class="sr-only" for="auth-username">用户名</label>
+          <input id="auth-username" autocomplete="username" minlength="3" maxlength="40" pattern="[A-Za-z0-9_-]+" placeholder="用户名" required />
+          <label class="sr-only" for="auth-password">密码</label>
           <input id="auth-password" type="password" autocomplete="current-password" minlength="6" maxlength="128" placeholder="密码（至少 6 位）" required />
+          <div id="auth-confirm-group" hidden>
+            <label class="sr-only" for="auth-confirm-password">确认密码</label>
+            <input id="auth-confirm-password" type="password" autocomplete="new-password" minlength="6" maxlength="128" placeholder="再次输入密码" />
+          </div>
           <p class="auth-error" id="auth-error" role="alert"></p>
-          <button class="auth-submit" type="submit">登录</button>
-          <p class="auth-hint">Demo 环境提供 3 个固定账号</p>
+          <button class="auth-submit" id="auth-submit" type="submit">登录</button>
         </form>
       </section>
 
@@ -50,7 +60,7 @@
           <button class="stop" id="stop" type="button" aria-label="停止生成" title="停止生成" hidden>停止</button>
           <label class="sr-only" for="message">输入消息</label>
           <textarea id="message" rows="1" maxlength="8000" placeholder="输入你想探索的问题…" required></textarea>
-          <button class="send" id="send" type="submit" aria-label="发送消息">↑</button>
+          <button class="send" id="send" type="submit" aria-label="发送消息">发送</button>
         </form>
         <div class="footer-row">
           <span>默认使用北京时间 · 数据会随来源更新</span>
@@ -59,6 +69,6 @@
         <p class="legal-note">非官方 NBA 学习与演示项目 · 与 NBA、NBA.com 及其关联机构无隶属、授权或合作关系。</p>
       </footer>
     </div>
-    <script src="/assets/app.js?v=17" defer></script>
+    <script src="/assets/app.js?v=18" defer></script>
   </body>
 </html>
