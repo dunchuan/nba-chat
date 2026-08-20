@@ -1,4 +1,4 @@
-name: Deploy Production: NBA Chat
+name: Deploy Production - NBA Chat
 
 on:
   workflow_dispatch:
