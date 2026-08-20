@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 WARMUP_URL = "https://www.nba.com/stats/"
 IMPERSONATE_PROFILE = "chrome120"
 WARMUP_TIMEOUT_SECONDS = 20
+LIVE_DATA_TIMEOUT_SECONDS = 20
 
 T = TypeVar("T")
 _session_lock = threading.RLock()
@@ -96,3 +97,31 @@ def run_nba_api(operation: Callable[[], T]) -> T:
             )
             _ensure_session(force_refresh=True)
             return operation()
+
+
+def fetch_nba_live_json(url: str) -> dict:
+    """Fetch an NBA CDN live-data document with the browser-like session.
+
+    NBA game pages use CDN documents for their Box Score presentation.  Reuse
+    the same warmed session as the stats endpoints so Akamai cookies and the
+    browser TLS fingerprint are consistent across both hosts.
+    """
+    with _session_lock:
+        for attempt in range(2):
+            session = _ensure_session(force_refresh=attempt == 1)
+            try:
+                response = session.get(
+                    url,
+                    timeout=LIVE_DATA_TIMEOUT_SECONDS,
+                    headers={"Accept": "application/json, text/plain, */*"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("NBA live response is not a JSON object")
+                return payload
+            except Exception:
+                if attempt == 1:
+                    raise
+                logger.info("NBA CDN request failed; refreshing browser session and retrying once", exc_info=True)
+    raise RuntimeError("NBA CDN request failed without an exception")  # pragma: no cover

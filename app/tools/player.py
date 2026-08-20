@@ -7,13 +7,18 @@ from app.tools.support import cached, dump, save
 def _json(source, **payload):
     return json.dumps({"source": source, **payload}, ensure_ascii=False, default=str)
 
+
 @tool
 def lookup_boxscore_data(game_id: str) -> str:
-    """Get traditional player box score data for one game."""
+    """Get player Box Score data from the NBA Stats API."""
     game_id = str(game_id or "").strip()
     if not game_id:
         return _json("nba_api", game_id="", players=[], error="missing_game_id")
-    hit = cached("boxscore", game_id)
+    # Temporarily avoid cdn.nba.com live Box Score: its access is less stable
+    # across local, VPS, and hosted environments.  Keep a separate key so a
+    # previously cached CDN response is never reused on this path.
+    cache_key = f"stats-v3:{game_id}"
+    hit = cached("boxscore", cache_key)
     if hit:
         return hit
     try:
@@ -24,9 +29,21 @@ def lookup_boxscore_data(game_id: str) -> str:
             ).get_data_frames()
         )
         frame = frames[0] if frames else None
-        return save("boxscore", game_id, _json("nba_api", game_id=str(game_id), players=frame.to_dict(orient="records") if frame is not None else []))
+        players = frame.to_dict(orient="records") if frame is not None else []
+        for official_order, row in enumerate(players):
+            row["officialOrder"] = official_order
+        return save(
+            "boxscore",
+            cache_key,
+            _json(
+                "nba_api",
+                game_id=game_id,
+                players=players,
+                roster_order="stats_api_source_order",
+            ),
+        )
     except Exception as exc:
-        return _json("nba_api", game_id=str(game_id), players=[], error=type(exc).__name__)
+        return _json("nba_api", game_id=game_id, players=[], error=type(exc).__name__)
 
 @tool
 def lookup_player_season_stats(year: int, player_name: str = "", season_type: str = "Regular Season") -> str:

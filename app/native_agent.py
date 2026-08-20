@@ -15,6 +15,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
+from app.renderers import render_boxscore_template
 from app.state import AgentState
 from app.tools.contracts import normalize_tool_result
 from app.evidence import evaluate_tool_evidence
@@ -209,6 +210,11 @@ def build_native_tool_graph(tools):
         # observations in multi-game requests.
         result["template_rendered"] = False
         result["presentation_mode"] = "model_selected"
+        boxscore_template = render_boxscore_template(list(state.get("messages") or []))
+        if boxscore_template:
+            result["messages"] = [AIMessage(content=boxscore_template)]
+            result["template_rendered"] = True
+            result["presentation_mode"] = "boxscore_template"
         if state.get("evidence_complete") is False and any(isinstance(message, ToolMessage) for message in state.get("messages") or []):
             result["messages"] = [AIMessage(content="当前 NBA 数据工具返回的范围不足，暂时无法可靠核实问题。请补充更具体的系列赛或场次。")]
             result["template_rendered"] = False

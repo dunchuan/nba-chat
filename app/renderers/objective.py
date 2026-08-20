@@ -12,6 +12,8 @@ OBJECTIVE_HINTS = (
 ANALYSIS_HINTS = (
     "分析", "为什么", "原因", "差距", "优势", "劣势", "比较", "对比", "预测",
     "机会", "表现如何", "赢点", "重要",
+    "analysis", "analyze", "why", "compare", "comparison", "predict", "prediction",
+    "advantage", "disadvantage", "chance", "performance",
 )
 
 
@@ -162,6 +164,139 @@ def _time_table(payload: dict[str, Any]) -> str:
         if data.get(key):
             lines.append(f"| {label} | {data[key]} |")
     return "\n".join(lines)
+
+
+def _player_display_name(row: dict[str, Any]) -> str:
+    first = str(row.get("firstName") or row.get("FIRST_NAME") or "").strip()
+    family = str(row.get("familyName") or row.get("lastName") or row.get("LAST_NAME") or "").strip()
+    full_name = f"{first} {family}".strip()
+    return full_name if full_name else str(_value(row, "name", "nameI", "playerName", "PLAYER_NAME"))
+
+
+def _has_player_identity(row: dict[str, Any]) -> bool:
+    """Exclude Stats API roster placeholders that have no player identity."""
+    return _player_display_name(row).strip() not in {"", "-", "None"}
+
+
+def _played_in_game(row: dict[str, Any]) -> bool:
+    """A player-stat table contains only players with an official minutes value."""
+    minutes = _value(row, "minutes", "MIN", "min")
+    return str(minutes).strip() not in {"", "-", "None"}
+
+
+def _shooting_value(row: dict[str, Any], made: str, attempted: str, percentage: str) -> str:
+    made_value = _value(row, made)
+    attempted_value = _value(row, attempted)
+    if made_value == "-" or attempted_value == "-":
+        return "-"
+    percentage_value = row.get(percentage)
+    if percentage_value in (None, ""):
+        return f"{made_value}/{attempted_value}"
+    try:
+        numeric = float(percentage_value)
+        display = numeric * 100 if 0 <= numeric <= 1 else numeric
+        return f"{made_value}/{attempted_value} ({display:.1f}%)"
+    except (TypeError, ValueError):
+        return f"{made_value}/{attempted_value} ({percentage_value})"
+
+
+def _percentage_value(row: dict[str, Any], *keys: str) -> str:
+    """Format NBA API decimal percentages for their own Box Score column."""
+    value = _value(row, *keys)
+    if value == "-":
+        return "-"
+    try:
+        numeric = float(value)
+        numeric = numeric * 100 if 0 <= numeric <= 1 else numeric
+        return f"{numeric:.1f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def render_boxscore_template(messages: list[object]) -> str | None:
+    """Render a stable, high-value table for a simple single-game player-stat request."""
+    query = _human_query(messages).lower()
+    if any(hint.lower() in query for hint in ANALYSIS_HINTS):
+        return None
+
+    for message in reversed(messages):
+        if str(getattr(message, "name", "")) != "lookup_boxscore_data":
+            continue
+        payload = _payload(message)
+        # BoxScoreTraditionalV3 can include blank roster slots and named DNP
+        # entries with zeroed statistics. They do not belong in a player-stats
+        # table; only players with an official MIN value are rendered.
+        players = [
+            row
+            for row in payload.get("players") or []
+            if isinstance(row, dict) and _has_player_identity(row) and _played_in_game(row)
+        ]
+        if not players:
+            return None
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in players:
+            team = str(_value(row, "teamTricode", "team", "TEAM_ABBREVIATION", "teamAbbreviation"))
+            grouped.setdefault(team, []).append(row)
+
+        # Put the values users compare first, then retain the complete shooting
+        # split and secondary box-score fields for detailed inspection.
+        fields = [
+            "球员", "上场时间", "得分", "篮板", "助攻", "抢断", "盖帽", "正负值",
+            "投篮命中", "投篮出手", "投篮命中率", "三分命中", "三分出手", "三分命中率",
+            "罚球命中", "罚球出手", "罚球命中率", "前场篮板", "后场篮板", "失误", "犯规",
+        ]
+        sections: list[str] = []
+        for team, rows in grouped.items():
+            # The API response is the NBA official roster sequence.  Do not rank
+            # players by PTS, MIN, +/- or alphabetical order for a box score.
+            rows = sorted(
+                enumerate(rows),
+                key=lambda indexed_row: (
+                    int(indexed_row[1].get("officialOrder", indexed_row[0]))
+                    if str(indexed_row[1].get("officialOrder", indexed_row[0])).lstrip("-").isdigit()
+                    else indexed_row[0]
+                ),
+            )
+            rows = [row for _, row in rows]
+            sample = rows[0]
+            team_name = str(_value(sample, "teamName", "TEAM_NAME"))
+            heading = team_name if team_name != "-" else team
+            if team and team != "-" and team not in heading:
+                heading = f"{heading} ({team})"
+            lines = [
+                f"### {heading}",
+                "| " + " | ".join(fields) + " |",
+                "|" + "---|" * len(fields),
+            ]
+            for row in rows:
+                values = [
+                    _player_display_name(row),
+                    _value(row, "minutes", "MIN", "min"),
+                    _value(row, "points", "pts", "PTS"),
+                    _value(row, "reboundsTotal", "reb", "REB"),
+                    _value(row, "assists", "ast", "AST"),
+                    _value(row, "steals", "stl", "STL"),
+                    _value(row, "blocks", "blk", "BLK"),
+                    _value(row, "plusMinusPoints", "plusMinus", "PLUS_MINUS"),
+                    _value(row, "fieldGoalsMade", "fgm", "FGM"),
+                    _value(row, "fieldGoalsAttempted", "fga", "FGA"),
+                    _percentage_value(row, "fieldGoalsPercentage", "fgPct", "FG_PCT"),
+                    _value(row, "threePointersMade", "fg3m", "FG3M"),
+                    _value(row, "threePointersAttempted", "fg3a", "FG3A"),
+                    _percentage_value(row, "threePointersPercentage", "fg3Pct", "FG3_PCT"),
+                    _value(row, "freeThrowsMade", "ftm", "FTM"),
+                    _value(row, "freeThrowsAttempted", "fta", "FTA"),
+                    _percentage_value(row, "freeThrowsPercentage", "ftPct", "FT_PCT"),
+                    _value(row, "reboundsOffensive", "OREB"),
+                    _value(row, "reboundsDefensive", "DREB"),
+                    _value(row, "turnovers", "tov", "TOV"),
+                    _value(row, "foulsPersonal", "pf", "PF"),
+                ]
+                lines.append("| " + " | ".join(str(value) for value in values) + " |")
+            sections.append("\n".join(lines))
+        return "\n\n".join(sections)
+    return None
 
 
 def render_objective_response(messages: list[object]) -> str | None:
