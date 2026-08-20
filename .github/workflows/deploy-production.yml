@@ -23,10 +23,24 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.VULTR_SSH_PRIVATE_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.VULTR_KNOWN_HOSTS }}
         run: |
+          test -n "$SSH_PRIVATE_KEY" || {
+            echo "VULTR_SSH_PRIVATE_KEY is not configured"
+            exit 1
+          }
+
+          test -n "$SSH_KNOWN_HOSTS" || {
+            echo "VULTR_KNOWN_HOSTS is not configured"
+            exit 1
+          }
+
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+
+          printf '%s\n' "$SSH_PRIVATE_KEY" |
+            tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+          printf '%s\n' "$SSH_KNOWN_HOSTS" |
+            tr -d '\r' > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
       - name: Deploy to Vultr
@@ -34,23 +48,44 @@ jobs:
           DEPLOY_HOST: ${{ vars.VULTR_HOST }}
           DEPLOY_USER: ${{ vars.VULTR_USER }}
         run: |
-          ssh -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
+          : "${DEPLOY_HOST:?VULTR_HOST is not configured}"
+          : "${DEPLOY_USER:?VULTR_USER is not configured}"
+
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/id_ed25519 \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            'bash -se' <<'REMOTE'
+
           set -Eeuo pipefail
 
           cd /opt/nba-chat
+
           git checkout main
           git pull --ff-only origin main
-          docker compose up -d --build --remove-orphans
+
+          docker compose up \
+            -d \
+            --build \
+            --remove-orphans
 
           for attempt in {1..30}; do
-            if curl -fsS http://127.0.0.1:8000/api/health; then
+            if curl -fsS \
+              http://127.0.0.1:8000/api/health
+            then
               echo
               echo "Deployment succeeded."
+              docker compose ps
               exit 0
             fi
+
+            echo "Waiting for application: $attempt/30"
             sleep 2
           done
 
+          echo "Health check failed."
           docker compose ps
           docker compose logs --tail=100 nba-chat
           exit 1
