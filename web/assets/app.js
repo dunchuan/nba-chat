@@ -7,7 +7,9 @@ const workspace = document.querySelector(".workspace");
 const intro = document.querySelector("#intro");
 const statusDot = document.querySelector("#status-dot");
 const statusText = document.querySelector("#status-text");
-const accountButton = document.querySelector("#account-button");
+const accountActions = document.querySelector("#account-actions");
+const accountUsername = document.querySelector("#account-username");
+const logoutButton = document.querySelector("#logout-button");
 const authPanel = document.querySelector("#auth-panel");
 const authForm = document.querySelector("#auth-form");
 const authTitle = document.querySelector("#auth-title");
@@ -20,6 +22,18 @@ const authLoginTab = document.querySelector("#auth-login-tab");
 const authRegisterTab = document.querySelector("#auth-register-tab");
 const authDescription = document.querySelector("#auth-description");
 const authSubmit = document.querySelector("#auth-submit");
+const sidebarNewChatButton = document.querySelector("#sidebar-new-chat");
+const conversationList = document.querySelector("#conversation-list");
+const clearConversationsButton = document.querySelector("#clear-conversations");
+const clearConversationsModal = document.querySelector("#clear-conversations-modal");
+const clearConversationsCancel = document.querySelector("#clear-conversations-cancel");
+const clearConversationsConfirm = document.querySelector("#clear-conversations-confirm");
+const renameConversationModal = document.querySelector("#rename-conversation-modal");
+const renameConversationInput = document.querySelector("#rename-conversation-input");
+const renameConversationCancel = document.querySelector("#rename-conversation-cancel");
+const renameConversationSave = document.querySelector("#rename-conversation-save");
+const appLayout = document.querySelector(".app-layout");
+const sidebarToggle = document.querySelector("#sidebar-toggle");
 
 sendButton.textContent = "发送";
 sendButton.setAttribute("aria-label", "发送消息");
@@ -32,6 +46,8 @@ const state = {
   user: null,
   authMode: "login",
   registrationEnabled: true,
+  conversations: [],
+  renamingThreadId: "",
 };
 
 function userStorageKey() {
@@ -42,12 +58,115 @@ function threadStorageKey() {
   return state.user ? `nba-chat-thread-${state.user.id}` : "nba-chat-thread";
 }
 
-function updateAccountButton() {
-  accountButton.textContent = state.user ? `${state.user.username} · 退出` : "登录";
+function conversationsStorageKey() {
+  return state.user ? `nba-chat-conversations-${state.user.id}` : "nba-chat-conversations";
+}
+
+function setSidebarCollapsed(collapsed, persistPreference = true) {
+  appLayout?.classList.toggle("sidebar-collapsed", collapsed);
+  if (sidebarToggle) {
+    const label = collapsed ? "展开侧栏" : "收起侧栏";
+    sidebarToggle.setAttribute("aria-label", label);
+    sidebarToggle.setAttribute("title", label);
+  }
+  if (persistPreference) localStorage.setItem("nba-chat-sidebar-collapsed", String(collapsed));
+}
+
+function updateAccountActions() {
+  const authenticated = Boolean(state.user && state.user.id !== "guest");
+  accountActions.hidden = !authenticated;
+  accountUsername.textContent = authenticated ? state.user.username : "";
+}
+
+function conversationTitle(messages) {
+  const firstQuestion = messages.find((message) => message.role === "user" && message.content)?.content;
+  return firstQuestion ? String(firstQuestion).replace(/\s+/g, " ").trim() : "新对话";
+}
+
+function formatConversationTime(updatedAt) {
+  const elapsed = Date.now() - Number(updatedAt || 0);
+  if (elapsed < 60_000) return "刚刚";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前`;
+  if (elapsed < 86_400_000) return "今天";
+  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(new Date(updatedAt));
+}
+
+function renderConversationList() {
+  if (!conversationList) return;
+  conversationList.replaceChildren();
+  if (!state.conversations.length) {
+    const empty = document.createElement("p");
+    empty.className = "conversation-empty";
+    empty.textContent = "开始一个新对话后，会话将显示在这里。";
+    conversationList.append(empty);
+    return;
+  }
+
+  state.conversations.forEach((conversation) => {
+    const item = document.createElement("div");
+    item.className = "conversation-item";
+    item.classList.toggle("active", conversation.id === state.threadId);
+
+    const selectButton = document.createElement("button");
+    selectButton.type = "button";
+    selectButton.className = "conversation-item-main";
+    selectButton.dataset.threadId = conversation.id;
+    selectButton.innerHTML = `<span class="conversation-item-title"></span><span class="conversation-item-time"></span>`;
+    selectButton.querySelector(".conversation-item-title").textContent = conversation.title;
+    selectButton.querySelector(".conversation-item-time").textContent = formatConversationTime(conversation.updatedAt);
+    selectButton.addEventListener("click", () => selectConversation(conversation.id));
+
+    const renameButton = document.createElement("button");
+    renameButton.type = "button";
+    renameButton.className = "conversation-rename";
+    renameButton.setAttribute("aria-label", "重命名对话");
+    renameButton.setAttribute("title", "重命名对话");
+    renameButton.textContent = "✎";
+    renameButton.addEventListener("click", () => openRenameConversationModal(conversation.id));
+
+    item.append(selectButton, renameButton);
+    conversationList.append(item);
+  });
+}
+
+function loadConversations() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(conversationsStorageKey()) || "[]");
+    state.conversations = Array.isArray(saved) ? saved : [];
+  } catch {
+    state.conversations = [];
+  }
+
+  // One-time migration for the original single-conversation local storage.
+  const legacyMessages = JSON.parse(localStorage.getItem(userStorageKey()) || "[]");
+  const legacyThreadId = localStorage.getItem(threadStorageKey());
+  if (!state.conversations.length && legacyThreadId && Array.isArray(legacyMessages) && legacyMessages.length) {
+    state.conversations = [{
+      id: legacyThreadId,
+      title: conversationTitle(legacyMessages),
+      updatedAt: Date.now(),
+      messages: legacyMessages,
+    }];
+  }
 }
 
 function persist() {
+  if (!state.threadId || !state.messages.length) {
+    renderConversationList();
+    return;
+  }
+  const existing = state.conversations.find((item) => item.id === state.threadId);
+  const current = {
+    id: state.threadId,
+    title: existing?.title || conversationTitle(state.messages),
+    updatedAt: Date.now(),
+    messages: state.messages,
+  };
+  state.conversations = [current, ...state.conversations.filter((item) => item.id !== state.threadId)]
+    .slice(0, 30);
+  localStorage.setItem(conversationsStorageKey(), JSON.stringify(state.conversations));
   localStorage.setItem(userStorageKey(), JSON.stringify(state.messages));
+  renderConversationList();
 }
 
 function newThreadId() {
@@ -69,18 +188,88 @@ function resetConversation() {
   state.threadId = newThreadId();
   state.messages = [];
   localStorage.setItem(threadStorageKey(), state.threadId);
-  persist();
   chat.replaceChildren();
   intro.hidden = false;
+  renderConversationList();
 }
 
 function restoreConversation() {
+  loadConversations();
   state.threadId = localStorage.getItem(threadStorageKey()) || newThreadId();
-  state.messages = JSON.parse(localStorage.getItem(userStorageKey()) || "[]");
+  const selected = state.conversations.find((item) => item.id === state.threadId);
+  state.messages = Array.isArray(selected?.messages)
+    ? selected.messages
+    : JSON.parse(localStorage.getItem(userStorageKey()) || "[]");
   localStorage.setItem(threadStorageKey(), state.threadId);
   chat.replaceChildren();
   state.messages.forEach(({ role, content }) => addMessage(role, content, false));
   intro.hidden = state.messages.length > 0;
+  renderConversationList();
+}
+
+function selectConversation(threadId) {
+  if (state.busy || threadId === state.threadId) return;
+  const selected = state.conversations.find((item) => item.id === threadId);
+  if (!selected) return;
+  state.threadId = selected.id;
+  state.messages = Array.isArray(selected.messages) ? selected.messages : [];
+  localStorage.setItem(threadStorageKey(), state.threadId);
+  localStorage.setItem(userStorageKey(), JSON.stringify(state.messages));
+  chat.replaceChildren();
+  state.messages.forEach(({ role, content }) => addMessage(role, content, false));
+  intro.hidden = state.messages.length > 0;
+  renderConversationList();
+  scrollToLatest();
+}
+
+function openClearConversationsModal() {
+  if (!clearConversationsModal || state.busy || !state.conversations.length) return;
+  clearConversationsModal.hidden = false;
+  clearConversationsCancel?.focus();
+}
+
+function closeClearConversationsModal() {
+  if (!clearConversationsModal) return;
+  clearConversationsModal.hidden = true;
+  clearConversationsButton?.focus();
+}
+
+function openRenameConversationModal(threadId) {
+  if (!renameConversationModal || state.busy) return;
+  const conversation = state.conversations.find((item) => item.id === threadId);
+  if (!conversation) return;
+  state.renamingThreadId = threadId;
+  renameConversationInput.value = conversation.title;
+  renameConversationModal.hidden = false;
+  requestAnimationFrame(() => {
+    renameConversationInput?.focus();
+    renameConversationInput?.select();
+  });
+}
+
+function closeRenameConversationModal() {
+  if (!renameConversationModal) return;
+  renameConversationModal.hidden = true;
+  state.renamingThreadId = "";
+}
+
+function saveConversationRename() {
+  const title = renameConversationInput?.value.trim();
+  if (!state.renamingThreadId || !title) return;
+  const conversation = state.conversations.find((item) => item.id === state.renamingThreadId);
+  if (!conversation) return;
+  conversation.title = title;
+  localStorage.setItem(conversationsStorageKey(), JSON.stringify(state.conversations));
+  closeRenameConversationModal();
+  renderConversationList();
+}
+
+function clearAllConversations() {
+  state.conversations = [];
+  localStorage.removeItem(conversationsStorageKey());
+  localStorage.removeItem(userStorageKey());
+  closeClearConversationsModal();
+  resetConversation();
 }
 
 function scrollToLatest() {
@@ -119,10 +308,20 @@ function renderMarkdown(value) {
   let index = 0;
   while (index < lines.length) {
     const line = lines[index];
-    if (/^###\s+/.test(line) && index + 2 < lines.length && lines[index + 1].trim().startsWith("|") && /^\s*\|?\s*:?-{3,}/.test(lines[index + 2])) {
-      const heading = escapeHtml(line.replace(/^###\s+/, ""));
-      const rows = [];
+    const sectionLabel = /^\*\*(.+?[：:])\*\*$/.exec(line.trim());
+    if (sectionLabel) {
+      while (output.length && output[output.length - 1] === "") output.pop();
+      output.push(`<h4 class="section-label">${escapeHtml(sectionLabel[1])}</h4>`);
       index += 1;
+      continue;
+    }
+    const teamHeading = /^(?:##|###)\s+/.exec(line);
+    let tableStart = index + 1;
+    while (tableStart < lines.length && !lines[tableStart].trim()) tableStart += 1;
+    if (teamHeading && tableStart + 1 < lines.length && lines[tableStart].trim().startsWith("|") && /^\s*\|?\s*:?-{3,}/.test(lines[tableStart + 1])) {
+      const heading = escapeHtml(line.replace(/^#{2,3}\s+/, ""));
+      const rows = [];
+      index = tableStart;
       while (index < lines.length && lines[index].trim().startsWith("|")) {
         const cells = lines[index].trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
         if (!cells.every((cell) => /^:?-{3,}:?$/.test(cell))) rows.push(cells);
@@ -130,7 +329,7 @@ function renderMarkdown(value) {
       }
       if (rows.length) {
         const table = `<table><thead><tr>${rows[0].map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join("")}</tr></thead><tbody>${rows.slice(1).map((row) => `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
-        output.push(`<section class="team-card"><h3>${heading}</h3>${table}</section>`);
+        output.push(`<section class="team-card"><h3>${heading}</h3><div class="table-scroll">${table}</div></section>`);
       }
       continue;
     }
@@ -159,22 +358,28 @@ function renderMarkdown(value) {
     output.push(html);
     index += 1;
   }
-  return output.join("\n").replace(/(<li>.*<\/li>\n?)+/g, (list) => `<ul>${list}</ul>`);
+  return output.join("\n")
+    .replace(/(<li>.*<\/li>\n?)+/g, (list) => `<ul>${list}</ul>`)
+    .replace(/(<\/(?:table|section)>)\s*(<h4 class="section-label">)/g, "$1$2")
+    .replace(/(<\/h4>)\s*(<ul>)/g, "$1$2");
 }
 
 function addMessage(role, content, save = true, webSearchUsed = false, gameDataUsed = false, playerDataUsed = false, nbaApiGameUsed = false) {
   const article = document.createElement("article");
   article.className = `message ${role}`;
 
-  const label = document.createElement("span");
-  label.className = "message-label";
-  label.textContent = role === "user" ? "您" : "NBA Chat";
+  if (role === "assistant") {
+    const identity = document.createElement("div");
+    identity.className = "assistant-identity";
+    identity.setAttribute("aria-label", "NBA 数据助手");
+    article.append(identity);
+  }
 
   const text = document.createElement("div");
   text.className = "message-text";
   text.innerHTML = role === "assistant" ? renderMarkdown(content) : escapeHtml(content);
 
-  article.append(label, text);
+  article.append(text);
   if (role === "assistant" && webSearchUsed) {
     const meta = document.createElement("div");
     meta.className = "message-meta";
@@ -205,7 +410,7 @@ function addMessage(role, content, save = true, webSearchUsed = false, gameDataU
 
 function hideAuth() {
   authPanel.hidden = true;
-  accountButton.hidden = false;
+  updateAccountActions();
   authError.textContent = "";
 }
 
@@ -229,7 +434,7 @@ function setAuthMode(mode) {
 
 function showAuth(mode = "login") {
   setAuthMode(mode);
-  accountButton.hidden = true;
+  accountActions.hidden = true;
   authPanel.hidden = false;
   authUsername.focus();
 }
@@ -238,7 +443,7 @@ async function loadUser() {
   const response = await fetch("/api/auth/me");
   if (!response.ok) return false;
   state.user = await response.json();
-  updateAccountButton();
+  updateAccountActions();
   return true;
 }
 
@@ -253,14 +458,15 @@ async function checkHealth() {
     if (!data.auth_required) {
       state.user = { id: "guest", username: "guest" };
       hideAuth();
-      accountButton.hidden = true;
+      accountActions.hidden = true;
     }
     if (!authenticated) {
-      updateAccountButton();
+      updateAccountActions();
       showAuth();
       statusText.textContent = "请先登录";
       return;
     }
+    loadConversations();
     const storedServerId = localStorage.getItem("nba-chat-server-instance");
     if (!storedServerId || storedServerId !== data.server_instance_id) {
       resetConversation();
@@ -355,16 +561,12 @@ stopButton.addEventListener("click", () => {
   if (state.controller) state.controller.abort();
 });
 
-accountButton.addEventListener("click", async () => {
-  if (!state.user) {
-    showAuth();
-    return;
-  }
+logoutButton.addEventListener("click", async () => {
   await fetch("/api/auth/logout", { method: "POST" });
   state.user = null;
   state.messages = [];
   chat.replaceChildren();
-  updateAccountButton();
+  updateAccountActions();
   showAuth();
 });
 
@@ -405,7 +607,7 @@ authForm.addEventListener("submit", async (event) => {
     } else {
       resetConversation();
     }
-    updateAccountButton();
+    updateAccountActions();
     hideAuth();
     statusText.textContent = "NBA Chat 在线";
     authPassword.value = "";
@@ -438,9 +640,37 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
   button.addEventListener("click", () => submitMessage(button.dataset.prompt));
 });
 
-document.querySelector("#new-chat").addEventListener("click", () => {
+function startNewConversation() {
+  if (state.busy) return;
   resetConversation();
   input.focus();
+}
+
+document.querySelector("#new-chat")?.addEventListener("click", startNewConversation);
+sidebarNewChatButton?.addEventListener("click", startNewConversation);
+
+clearConversationsButton?.addEventListener("click", openClearConversationsModal);
+clearConversationsCancel?.addEventListener("click", closeClearConversationsModal);
+clearConversationsConfirm?.addEventListener("click", clearAllConversations);
+renameConversationCancel?.addEventListener("click", closeRenameConversationModal);
+renameConversationSave?.addEventListener("click", saveConversationRename);
+renameConversationInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") saveConversationRename();
+});
+renameConversationModal?.addEventListener("click", (event) => {
+  if (event.target === renameConversationModal) closeRenameConversationModal();
+});
+clearConversationsModal?.addEventListener("click", (event) => {
+  if (event.target === clearConversationsModal) closeClearConversationsModal();
+});
+sidebarToggle?.addEventListener("click", () => {
+  setSidebarCollapsed(!appLayout?.classList.contains("sidebar-collapsed"));
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (!renameConversationModal?.hidden) closeRenameConversationModal();
+  if (!clearConversationsModal?.hidden) closeClearConversationsModal();
 });
 
+setSidebarCollapsed(localStorage.getItem("nba-chat-sidebar-collapsed") === "true", false);
 checkHealth();
