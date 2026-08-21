@@ -7,12 +7,15 @@ Safety, caching, and endpoint validation remain in the registered tools.
 
 import json
 import os
+import sqlite3
 from typing import Any
+from pathlib import Path
 
+import aiosqlite
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from app.renderers import render_boxscore_template
@@ -21,6 +24,11 @@ from app.tools.contracts import normalize_tool_result
 from app.evidence import evaluate_tool_evidence
 
 load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+CHECKPOINT_DB_PATH = Path(
+    os.getenv("LANGGRAPH_CHECKPOINT_SQLITE_PATH", str(BASE_DIR / "data" / "langgraph_checkpoints.sqlite3"))
+)
 
 
 NATIVE_AGENT_INSTRUCTIONS = """
@@ -135,7 +143,47 @@ def _compatibility_fields(state: NativeState) -> dict[str, object]:
     }
 
 
-def build_native_tool_graph(tools):
+async def create_async_sqlite_checkpointer() -> AsyncSqliteSaver:
+    """Create the durable checkpointer used by all web conversations."""
+    CHECKPOINT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    connection = await aiosqlite.connect(CHECKPOINT_DB_PATH)
+    await connection.execute("PRAGMA busy_timeout = 5000")
+    checkpointer = AsyncSqliteSaver(connection)
+    await checkpointer.setup()
+    return checkpointer
+
+
+def agent_thread_id(user_id: int | str, conversation_thread_id: str) -> str:
+    """Namespace a browser conversation ID so checkpoint state is user-isolated."""
+    return f"user-{user_id}:{conversation_thread_id}"
+
+
+def delete_agent_thread_state(user_id: int | str, conversation_thread_id: str) -> None:
+    """Delete durable LangGraph state for one user-owned conversation."""
+    if not CHECKPOINT_DB_PATH.exists():
+        return
+    thread_id = agent_thread_id(user_id, conversation_thread_id)
+    with sqlite3.connect(CHECKPOINT_DB_PATH) as connection:
+        connection.execute("PRAGMA busy_timeout = 5000")
+        # These tables are the public SQLite checkpointer schema created by
+        # SqliteSaver.setup(). Delete writes first for compatibility with
+        # SQLite foreign-key configurations.
+        connection.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
+        connection.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
+
+
+def delete_all_agent_thread_state(user_id: int | str) -> None:
+    """Delete durable LangGraph state for every conversation owned by a user."""
+    if not CHECKPOINT_DB_PATH.exists():
+        return
+    prefix = f"user-{user_id}:%"
+    with sqlite3.connect(CHECKPOINT_DB_PATH) as connection:
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("DELETE FROM writes WHERE thread_id LIKE ?", (prefix,))
+        connection.execute("DELETE FROM checkpoints WHERE thread_id LIKE ?", (prefix,))
+
+
+def build_native_tool_graph(tools, checkpointer: AsyncSqliteSaver):
     max_steps = max(2, int(os.getenv("REACT_MAX_STEPS", "12")))
     model = ChatOpenAI(
         model=os.getenv("MODEL_NAME", "qwen3.6-flash"),
@@ -239,12 +287,9 @@ def build_native_tool_graph(tools):
     workflow.add_edge("evidence", "agent")
     workflow.add_conditional_edges("evidence_guard", route_after_guard, {"agent": "agent", "finalize": "finalize"})
     workflow.add_edge("finalize", END)
-    return workflow.compile(checkpointer=InMemorySaver())
+    return workflow.compile(checkpointer=checkpointer)
 
 
-# Public runtime graph used by FastAPI and live tests.  Keeping construction
-# here makes native_agent the single application entry point; app.agent is no
-# longer required as a compatibility wrapper.
-from app.tools import get_tool_registry
-
-graph = build_native_tool_graph(get_tool_registry()) if os.getenv("DASHSCOPE_API_KEY") else None
+# FastAPI creates the graph in its lifespan, so AsyncSqliteSaver is bound to
+# the same event loop that later runs ``astream_events``.
+graph = None

@@ -4,44 +4,51 @@ Run with ``RUN_LIVE_TESTS=true``.  Assertions target observable agent
 behavior and tool evidence, rather than the retired router's internal fields.
 """
 
-import asyncio
+import json
 import os
 import unittest
 import uuid
 
-from langchain_core.messages import HumanMessage
+from fastapi.testclient import TestClient
 
-from app.native_agent import graph
+from app.main import app
 
 
 LIVE_TESTS_ENABLED = os.getenv("RUN_LIVE_TESTS", "false").strip().lower() == "true"
-
-
-def run(coro):
-    return asyncio.run(coro)
-
 
 @unittest.skipUnless(
     LIVE_TESTS_ENABLED,
     "Set RUN_LIVE_TESTS=true to run tests with real models and NBA API",
 )
 class LiveReactAgentTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+        response = cls.client.post("/api/auth/login", json={"username": "nbachat", "password": "nbachat"})
+        if response.status_code != 200:
+            raise RuntimeError(f"live test login failed: {response.status_code} {response.text}")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
     def invoke(self, message: str, thread_id: str | None = None):
-        return run(
-            graph.ainvoke(
-                {"messages": [HumanMessage(content=message)]},
-                config={
-                    "configurable": {
-                        "thread_id": thread_id or f"live-test-{uuid.uuid4()}"
-                    },
-                    "tags": ["automated-test", "live", "react"],
-                },
-            )
+        response = self.client.post(
+            "/api/chat",
+            json={"message": message, "thread_id": thread_id or f"live-test-{uuid.uuid4()}"},
         )
+        self.assertEqual(response.status_code, 200, response.text)
+        events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+        error = next((event for event in events if event.get("type") == "error"), None)
+        self.assertIsNone(error, error)
+        metadata = next((event for event in reversed(events) if event.get("type") == "metadata"), None)
+        self.assertIsNotNone(metadata, response.text)
+        return metadata
 
     def test_react_answers_an_objective_boxscore_question(self):
         result = self.invoke("2000 NBA Finals Game 1 player statistics")
-        answer = str(result["messages"][-1].content)
+        answer = str(result["answer"])
 
         self.assertTrue(answer.strip())
         self.assertTrue(result.get("retrieval_ok"))
@@ -50,7 +57,7 @@ class LiveReactAgentTests(unittest.TestCase):
 
     def test_react_uses_play_by_play_for_an_explicit_possession_request(self):
         result = self.invoke("2010 NBA Finals Game 5 first possession")
-        answer = str(result["messages"][-1].content)
+        answer = str(result["answer"])
 
         self.assertTrue(answer.strip())
         self.assertTrue(result.get("play_by_play_used"))
@@ -63,7 +70,7 @@ class LiveReactAgentTests(unittest.TestCase):
 
         self.assertEqual(first.get("retrieval_game_id"), "0049900083")
         self.assertEqual(second.get("retrieval_game_id"), "0049900083")
-        self.assertTrue(str(second["messages"][-1].content).strip())
+        self.assertTrue(str(second["answer"]).strip())
 
 
 if __name__ == "__main__":

@@ -519,6 +519,9 @@ async function submitMessage(message) {
     });
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
+      if (response.status === 409 && errorData.detail === "conversation_busy") {
+        throw new Error("该对话正在生成回答，请等待当前回答完成。");
+      }
       throw new Error(errorData.detail || "请求失败");
     }
     const reader = response.body.getReader();

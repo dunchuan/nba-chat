@@ -1,5 +1,6 @@
 from pathlib import Path
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -15,8 +16,15 @@ from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
-from app.native_agent import graph
+from app.native_agent import (
+    agent_thread_id,
+    build_native_tool_graph,
+    create_async_sqlite_checkpointer,
+    delete_agent_thread_state,
+    delete_all_agent_thread_state,
+)
 from app.tools.schedule import lookup_game_time_data
+from app.tools import get_tool_registry
 from app.auth import (
     authenticate,
     append_message,
@@ -37,7 +45,28 @@ from app.auth import (
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
-app = FastAPI(title="NBA Chat", version="1.0.0")
+graph = None
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Create the async checkpointer in FastAPI's serving event loop."""
+    global graph
+    init_auth_db()
+    checkpointer = None
+    if os.getenv("DASHSCOPE_API_KEY"):
+        checkpointer = await create_async_sqlite_checkpointer()
+        graph = build_native_tool_graph(get_tool_registry(), checkpointer)
+    application.state.checkpointer = checkpointer
+    try:
+        yield
+    finally:
+        graph = None
+        if checkpointer is not None:
+            await checkpointer.conn.close()
+
+
+app = FastAPI(title="NBA Chat", version="1.0.0", lifespan=lifespan)
 # Uvicorn configures this logger at INFO level and sends it to container stdout.
 # Reusing it ensures audit records appear in ``docker compose logs``.
 logger = logging.getLogger("uvicorn.error")
@@ -46,7 +75,24 @@ SERVER_INSTANCE_ID = uuid.uuid4().hex
 AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "true").strip().lower() == "true"
 REGISTRATION_ENABLED = os.getenv("REGISTRATION_ENABLED", "true").strip().lower() == "true"
 SESSION_MAX_AGE = max(3600, int(os.getenv("SESSION_MAX_AGE", str(7 * 24 * 3600))))
-init_auth_db()
+_active_chat_threads: set[tuple[str, str]] = set()
+
+
+def _chat_lock_key(user_id: object, thread_id: str) -> tuple[str, str]:
+    return str(user_id), thread_id
+
+
+def _try_acquire_chat_slot(user_id: object, thread_id: str) -> bool:
+    """Acquire a per-process slot for one user conversation."""
+    key = _chat_lock_key(user_id, thread_id)
+    if key in _active_chat_threads:
+        return False
+    _active_chat_threads.add(key)
+    return True
+
+
+def _release_chat_slot(user_id: object, thread_id: str) -> None:
+    _active_chat_threads.discard(_chat_lock_key(user_id, thread_id))
 
 
 @app.middleware("http")
@@ -290,6 +336,7 @@ async def remove_conversation(thread_id: str, nba_session: str | None = Cookie(d
     deleted = await asyncio.to_thread(delete_conversation, int(user["id"]), thread_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="对话不存在")
+    await asyncio.to_thread(delete_agent_thread_state, int(user["id"]), thread_id)
     return {"ok": True}
 
 
@@ -297,6 +344,7 @@ async def remove_conversation(thread_id: str, nba_session: str | None = Cookie(d
 async def remove_all_conversations(nba_session: str | None = Cookie(default=None)):
     user = require_user(nba_session)
     count = await asyncio.to_thread(delete_all_conversations, int(user["id"]))
+    await asyncio.to_thread(delete_all_agent_thread_state, int(user["id"]))
     return {"ok": True, "deleted": count}
 
 
@@ -332,10 +380,16 @@ async def chat(
     # thread ID. Keep the API resilient and start a fresh conversation.
     thread_id = payload.thread_id.strip() or uuid.uuid4().hex
     message = payload.message.strip()
+    if not _try_acquire_chat_slot(user["id"], thread_id):
+        raise HTTPException(status_code=409, detail="conversation_busy")
     try:
         await asyncio.to_thread(append_message, int(user["id"]), thread_id, "user", message)
     except PermissionError as exc:
+        _release_chat_slot(user["id"], thread_id)
         raise HTTPException(status_code=403, detail="无权访问该对话") from exc
+    except Exception:
+        _release_chat_slot(user["id"], thread_id)
+        raise
     client_ip = _client_ip(request)
     started_at = time.perf_counter()
     audit_fields = {
@@ -357,7 +411,7 @@ async def chat(
                     # LangGraph super-step safety limit. This is separate
                     # from the per-request ReAct budget in native_agent.py.
                     "recursion_limit": max(24, int(os.getenv("LANGGRAPH_RECURSION_LIMIT", "40"))),
-                    "configurable": {"thread_id": f"user-{user['id']}:{thread_id}"},
+                    "configurable": {"thread_id": agent_thread_id(user["id"], thread_id)},
                     "tags": ["nba-chat", "web-chat"],
                     "metadata": {
                         "thread_id": thread_id,
@@ -421,6 +475,9 @@ async def chat(
                 error=str(exc),
             )
             yield _stream_event("error", message=f"Agent 调用失败：{exc}")
+
+        finally:
+            _release_chat_slot(user["id"], thread_id)
 
     return StreamingResponse(
         stream_response(),
