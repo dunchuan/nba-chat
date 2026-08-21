@@ -34,6 +34,7 @@ const renameConversationCancel = document.querySelector("#rename-conversation-ca
 const renameConversationSave = document.querySelector("#rename-conversation-save");
 const appLayout = document.querySelector(".app-layout");
 const sidebarToggle = document.querySelector("#sidebar-toggle");
+const mobileSidebarToggle = document.querySelector("#mobile-sidebar-toggle");
 
 sendButton.textContent = "发送";
 sendButton.setAttribute("aria-label", "发送消息");
@@ -664,7 +665,14 @@ clearConversationsModal?.addEventListener("click", (event) => {
   if (event.target === clearConversationsModal) closeClearConversationsModal();
 });
 sidebarToggle?.addEventListener("click", () => {
+  if (window.matchMedia("(max-width: 620px)").matches) {
+    appLayout?.classList.remove("mobile-sidebar-open");
+    return;
+  }
   setSidebarCollapsed(!appLayout?.classList.contains("sidebar-collapsed"));
+});
+mobileSidebarToggle?.addEventListener("click", () => {
+  appLayout?.classList.toggle("mobile-sidebar-open");
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
