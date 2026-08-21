@@ -32,9 +32,13 @@ const renameConversationModal = document.querySelector("#rename-conversation-mod
 const renameConversationInput = document.querySelector("#rename-conversation-input");
 const renameConversationCancel = document.querySelector("#rename-conversation-cancel");
 const renameConversationSave = document.querySelector("#rename-conversation-save");
+const deleteConversationModal = document.querySelector("#delete-conversation-modal");
+const deleteConversationCancel = document.querySelector("#delete-conversation-cancel");
+const deleteConversationConfirm = document.querySelector("#delete-conversation-confirm");
 const appLayout = document.querySelector(".app-layout");
 const sidebarToggle = document.querySelector("#sidebar-toggle");
 const mobileSidebarToggle = document.querySelector("#mobile-sidebar-toggle");
+const sidebarScrim = document.querySelector("#sidebar-scrim");
 
 sendButton.textContent = "发送";
 sendButton.setAttribute("aria-label", "发送消息");
@@ -49,18 +53,11 @@ const state = {
   registrationEnabled: true,
   conversations: [],
   renamingThreadId: "",
+  deletingThreadId: "",
 };
-
-function userStorageKey() {
-  return state.user ? `nba-chat-messages-${state.user.id}` : "nba-chat-messages";
-}
 
 function threadStorageKey() {
   return state.user ? `nba-chat-thread-${state.user.id}` : "nba-chat-thread";
-}
-
-function conversationsStorageKey() {
-  return state.user ? `nba-chat-conversations-${state.user.id}` : "nba-chat-conversations";
 }
 
 function setSidebarCollapsed(collapsed, persistPreference = true) {
@@ -125,48 +122,34 @@ function renderConversationList() {
     renameButton.textContent = "✎";
     renameButton.addEventListener("click", () => openRenameConversationModal(conversation.id));
 
-    item.append(selectButton, renameButton);
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "conversation-delete";
+    deleteButton.setAttribute("aria-label", "删除对话");
+    deleteButton.setAttribute("title", "删除对话");
+    deleteButton.textContent = "×";
+    deleteButton.addEventListener("click", () => openDeleteConversationModal(conversation.id));
+
+    item.append(selectButton, renameButton, deleteButton);
     conversationList.append(item);
   });
 }
 
-function loadConversations() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(conversationsStorageKey()) || "[]");
-    state.conversations = Array.isArray(saved) ? saved : [];
-  } catch {
-    state.conversations = [];
-  }
-
-  // One-time migration for the original single-conversation local storage.
-  const legacyMessages = JSON.parse(localStorage.getItem(userStorageKey()) || "[]");
-  const legacyThreadId = localStorage.getItem(threadStorageKey());
-  if (!state.conversations.length && legacyThreadId && Array.isArray(legacyMessages) && legacyMessages.length) {
-    state.conversations = [{
-      id: legacyThreadId,
-      title: conversationTitle(legacyMessages),
-      updatedAt: Date.now(),
-      messages: legacyMessages,
-    }];
-  }
+async function loadConversations() {
+  const response = await fetch("/api/conversations");
+  if (!response.ok) throw new Error("无法加载历史对话");
+  const data = await response.json();
+  state.conversations = (data.conversations || []).map((conversation) => ({
+    id: conversation.thread_id,
+    title: conversation.title,
+    updatedAt: Number(conversation.updated_at) * 1000,
+  }));
+  renderConversationList();
 }
 
 function persist() {
-  if (!state.threadId || !state.messages.length) {
-    renderConversationList();
-    return;
-  }
-  const existing = state.conversations.find((item) => item.id === state.threadId);
-  const current = {
-    id: state.threadId,
-    title: existing?.title || conversationTitle(state.messages),
-    updatedAt: Date.now(),
-    messages: state.messages,
-  };
-  state.conversations = [current, ...state.conversations.filter((item) => item.id !== state.threadId)]
-    .slice(0, 30);
-  localStorage.setItem(conversationsStorageKey(), JSON.stringify(state.conversations));
-  localStorage.setItem(userStorageKey(), JSON.stringify(state.messages));
+  // Visible messages are persisted by the server during /api/chat. The browser
+  // only keeps the selected thread ID as a UI preference.
   renderConversationList();
 }
 
@@ -194,33 +177,44 @@ function resetConversation() {
   renderConversationList();
 }
 
-function restoreConversation() {
-  loadConversations();
+async function restoreConversation() {
+  await loadConversations();
   state.threadId = localStorage.getItem(threadStorageKey()) || newThreadId();
   const selected = state.conversations.find((item) => item.id === state.threadId);
-  state.messages = Array.isArray(selected?.messages)
-    ? selected.messages
-    : JSON.parse(localStorage.getItem(userStorageKey()) || "[]");
+  state.messages = [];
   localStorage.setItem(threadStorageKey(), state.threadId);
   chat.replaceChildren();
-  state.messages.forEach(({ role, content }) => addMessage(role, content, false));
-  intro.hidden = state.messages.length > 0;
+  if (selected) {
+    await loadConversationMessages(selected.id);
+  } else {
+    intro.hidden = false;
+  }
   renderConversationList();
 }
 
-function selectConversation(threadId) {
+async function loadConversationMessages(threadId) {
+  const response = await fetch(`/api/conversations/${encodeURIComponent(threadId)}`);
+  if (!response.ok) throw new Error("无法加载该对话");
+  const data = await response.json();
+  state.messages = data.messages || [];
+  chat.replaceChildren();
+  state.messages.forEach(({ role, content }) => addMessage(role, content, false));
+  intro.hidden = state.messages.length > 0;
+}
+
+async function selectConversation(threadId) {
   if (state.busy || threadId === state.threadId) return;
   const selected = state.conversations.find((item) => item.id === threadId);
   if (!selected) return;
   state.threadId = selected.id;
-  state.messages = Array.isArray(selected.messages) ? selected.messages : [];
   localStorage.setItem(threadStorageKey(), state.threadId);
-  localStorage.setItem(userStorageKey(), JSON.stringify(state.messages));
-  chat.replaceChildren();
-  state.messages.forEach(({ role, content }) => addMessage(role, content, false));
-  intro.hidden = state.messages.length > 0;
-  renderConversationList();
-  scrollToLatest();
+  try {
+    await loadConversationMessages(threadId);
+    renderConversationList();
+    scrollToLatest();
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 function openClearConversationsModal() {
@@ -254,23 +248,51 @@ function closeRenameConversationModal() {
   state.renamingThreadId = "";
 }
 
-function saveConversationRename() {
+async function saveConversationRename() {
   const title = renameConversationInput?.value.trim();
   if (!state.renamingThreadId || !title) return;
   const conversation = state.conversations.find((item) => item.id === state.renamingThreadId);
   if (!conversation) return;
+  const response = await fetch(`/api/conversations/${encodeURIComponent(state.renamingThreadId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  if (!response.ok) return;
   conversation.title = title;
-  localStorage.setItem(conversationsStorageKey(), JSON.stringify(state.conversations));
   closeRenameConversationModal();
   renderConversationList();
 }
 
-function clearAllConversations() {
+async function clearAllConversations() {
+  const response = await fetch("/api/conversations", { method: "DELETE" });
+  if (!response.ok) return;
   state.conversations = [];
-  localStorage.removeItem(conversationsStorageKey());
-  localStorage.removeItem(userStorageKey());
   closeClearConversationsModal();
   resetConversation();
+}
+
+function openDeleteConversationModal(threadId) {
+  if (!deleteConversationModal || state.busy) return;
+  state.deletingThreadId = threadId;
+  deleteConversationModal.hidden = false;
+  deleteConversationCancel?.focus();
+}
+
+function closeDeleteConversationModal() {
+  if (!deleteConversationModal) return;
+  deleteConversationModal.hidden = true;
+  state.deletingThreadId = "";
+}
+
+async function deleteSelectedConversation() {
+  const threadId = state.deletingThreadId;
+  if (!threadId) return;
+  const response = await fetch(`/api/conversations/${encodeURIComponent(threadId)}`, { method: "DELETE" });
+  if (!response.ok) return;
+  closeDeleteConversationModal();
+  if (threadId === state.threadId) resetConversation();
+  await loadConversations();
 }
 
 function scrollToLatest() {
@@ -467,14 +489,7 @@ async function checkHealth() {
       statusText.textContent = "请先登录";
       return;
     }
-    loadConversations();
-    const storedServerId = localStorage.getItem("nba-chat-server-instance");
-    if (!storedServerId || storedServerId !== data.server_instance_id) {
-      resetConversation();
-      localStorage.setItem("nba-chat-server-instance", data.server_instance_id);
-    } else {
-      restoreConversation();
-    }
+    await restoreConversation();
     statusText.textContent = data.agent_ready ? "NBA Chat 在线" : "等待配置";
   } catch {
     statusText.textContent = "正在唤醒";
@@ -537,6 +552,7 @@ async function submitMessage(message) {
     }
     pending.remove();
     addMessage("assistant", metadata.answer || answer, true, metadata.web_search_used, metadata.game_data_used, metadata.player_data_used, metadata.nba_api_game_used);
+    await loadConversations();
     scrollToLatest();
   } catch (error) {
     if (error.name === "AbortError") {
@@ -603,11 +619,7 @@ authForm.addEventListener("submit", async (event) => {
     }
 
     state.user = data;
-    if (localStorage.getItem(threadStorageKey())) {
-      restoreConversation();
-    } else {
-      resetConversation();
-    }
+    await restoreConversation();
     updateAccountActions();
     hideAuth();
     statusText.textContent = "NBA Chat 在线";
@@ -661,6 +673,11 @@ renameConversationInput?.addEventListener("keydown", (event) => {
 renameConversationModal?.addEventListener("click", (event) => {
   if (event.target === renameConversationModal) closeRenameConversationModal();
 });
+deleteConversationCancel?.addEventListener("click", closeDeleteConversationModal);
+deleteConversationConfirm?.addEventListener("click", deleteSelectedConversation);
+deleteConversationModal?.addEventListener("click", (event) => {
+  if (event.target === deleteConversationModal) closeDeleteConversationModal();
+});
 clearConversationsModal?.addEventListener("click", (event) => {
   if (event.target === clearConversationsModal) closeClearConversationsModal();
 });
@@ -674,9 +691,13 @@ sidebarToggle?.addEventListener("click", () => {
 mobileSidebarToggle?.addEventListener("click", () => {
   appLayout?.classList.toggle("mobile-sidebar-open");
 });
+sidebarScrim?.addEventListener("click", () => {
+  appLayout?.classList.remove("mobile-sidebar-open");
+});
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (!renameConversationModal?.hidden) closeRenameConversationModal();
+  if (!deleteConversationModal?.hidden) closeDeleteConversationModal();
   if (!clearConversationsModal?.hidden) closeClearConversationsModal();
 });
 

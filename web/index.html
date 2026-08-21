@@ -6,7 +6,7 @@
     <meta name="description" content="NBA Chat：面向中文球迷的 NBA 智能问答助手" />
     <title>NBA Chat · NBA 智能问答助手</title>
     <link rel="icon" type="image/x-icon" href="/assets/nba-favicon.ico" />
-    <link rel="stylesheet" href="/assets/styles.css?v=37" />
+    <link rel="stylesheet" href="/assets/styles.css?v=45" />
   </head>
   <body>
     <div class="shell">
@@ -40,6 +40,7 @@
           </nav>
           <button class="clear-conversations" id="clear-conversations" type="button">清空所有对话</button>
         </aside>
+        <button class="sidebar-scrim" id="sidebar-scrim" type="button" aria-label="Close conversation history"></button>
         <div class="conversation-pane">
           <main class="workspace">
         <section class="intro" id="intro">
@@ -82,7 +83,7 @@
       <div class="modal-backdrop" id="clear-conversations-modal" hidden>
         <section class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="clear-conversations-title" aria-describedby="clear-conversations-description">
           <h2 id="clear-conversations-title">清空所有对话？</h2>
-          <p id="clear-conversations-description">这会移除当前浏览器保存的全部对话记录，但不会影响账号、服务端数据或 LangSmith 追踪。</p>
+          <p id="clear-conversations-description">这会永久删除当前账号的全部对话和消息记录，但不会影响账号或 LangSmith 追踪。</p>
           <div class="confirm-modal-actions">
             <button class="modal-cancel" id="clear-conversations-cancel" type="button">取消</button>
             <button class="modal-confirm" id="clear-conversations-confirm" type="button">清空对话</button>
@@ -103,6 +104,17 @@
         </section>
       </div>
 
+      <div class="modal-backdrop" id="delete-conversation-modal" hidden>
+        <section class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-conversation-title">
+          <h2 id="delete-conversation-title">删除这条对话？</h2>
+          <p>这会永久删除此对话的全部消息，无法恢复。</p>
+          <div class="confirm-modal-actions">
+            <button class="modal-cancel" id="delete-conversation-cancel" type="button">取消</button>
+            <button class="modal-confirm" id="delete-conversation-confirm" type="button">删除对话</button>
+          </div>
+        </section>
+      </div>
+
       <footer class="composer-wrap">
         <form class="composer" id="chat-form">
           <button class="stop" id="stop" type="button" aria-label="停止生成" title="停止生成" hidden>停止</button>
@@ -118,6 +130,6 @@
         </div>
       </div>
     </div>
-    <script src="/assets/app.js?v=33" defer></script>
+    <script src="/assets/app.js?v=35" defer></script>
   </body>
 </html>

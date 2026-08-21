@@ -19,11 +19,17 @@ from app.native_agent import graph
 from app.tools.schedule import lookup_game_time_data
 from app.auth import (
     authenticate,
+    append_message,
     create_session,
     create_user,
+    delete_all_conversations,
+    delete_conversation,
+    get_conversation_messages,
     delete_session,
     init_auth_db,
+    list_conversations,
     normalize_username,
+    rename_conversation,
     user_from_session,
     username_for_user_id,
 )
@@ -60,6 +66,10 @@ class ChatRequest(BaseModel):
 class Credentials(BaseModel):
     username: str = Field(min_length=3, max_length=40, pattern=r"^[A-Za-z0-9_\-]+$")
     password: str = Field(min_length=6, max_length=128)
+
+
+class ConversationRenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
 
 
 def require_user(session: str | None) -> dict[str, object]:
@@ -244,6 +254,52 @@ async def logout(request: Request, response: Response, nba_session: str | None =
     return {"ok": True}
 
 
+@app.get("/api/conversations")
+async def conversations(nba_session: str | None = Cookie(default=None)):
+    user = require_user(nba_session)
+    return {"conversations": await asyncio.to_thread(list_conversations, int(user["id"]))}
+
+
+@app.get("/api/conversations/{thread_id}")
+async def conversation_messages(thread_id: str, nba_session: str | None = Cookie(default=None)):
+    user = require_user(nba_session)
+    try:
+        messages = await asyncio.to_thread(get_conversation_messages, int(user["id"]), thread_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="对话不存在") from exc
+    return {"thread_id": thread_id, "messages": messages}
+
+
+@app.patch("/api/conversations/{thread_id}")
+async def update_conversation(
+    thread_id: str,
+    payload: ConversationRenameRequest,
+    nba_session: str | None = Cookie(default=None),
+):
+    user = require_user(nba_session)
+    try:
+        await asyncio.to_thread(rename_conversation, int(user["id"]), thread_id, payload.title)
+    except (LookupError, ValueError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, LookupError) else 422, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.delete("/api/conversations/{thread_id}")
+async def remove_conversation(thread_id: str, nba_session: str | None = Cookie(default=None)):
+    user = require_user(nba_session)
+    deleted = await asyncio.to_thread(delete_conversation, int(user["id"]), thread_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    return {"ok": True}
+
+
+@app.delete("/api/conversations")
+async def remove_all_conversations(nba_session: str | None = Cookie(default=None)):
+    user = require_user(nba_session)
+    count = await asyncio.to_thread(delete_all_conversations, int(user["id"]))
+    return {"ok": True, "deleted": count}
+
+
 @app.get("/api/debug/game-time/{game_id}")
 async def debug_game_time(game_id: str):
     result = await asyncio.to_thread(lookup_game_time_data.invoke, game_id)
@@ -276,6 +332,10 @@ async def chat(
     # thread ID. Keep the API resilient and start a fresh conversation.
     thread_id = payload.thread_id.strip() or uuid.uuid4().hex
     message = payload.message.strip()
+    try:
+        await asyncio.to_thread(append_message, int(user["id"]), thread_id, "user", message)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="无权访问该对话") from exc
     client_ip = _client_ip(request)
     started_at = time.perf_counter()
     audit_fields = {
@@ -317,6 +377,8 @@ async def chat(
 
             messages = final_result.get("messages") or []
             answer = _chunk_text(messages[-1]) if messages else streamed_text
+            if answer:
+                await asyncio.to_thread(append_message, int(user["id"]), thread_id, "assistant", answer)
             yield _stream_event(
                 "metadata",
                 thread_id=thread_id,

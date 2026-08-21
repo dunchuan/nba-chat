@@ -72,6 +72,25 @@ def init_auth_db() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    thread_id TEXT NOT NULL UNIQUE,
+                    title TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_conversations_user_updated
+                    ON conversations(user_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_messages_conversation_id
+                    ON messages(conversation_id, id ASC);
                 """
             )
             # Migrate the previous demo names once, preserving their user IDs.
@@ -169,3 +188,101 @@ def delete_session(token: str | None) -> None:
         init_auth_db()
         with _connection() as db:
             db.execute("DELETE FROM sessions WHERE token = ?", (token,))
+
+
+def _conversation_title(message: str) -> str:
+    """Create a compact default title from the first user message."""
+    title = " ".join(message.split())
+    return (title[:80] or "新对话")
+
+
+def ensure_conversation(user_id: int, thread_id: str, first_message: str) -> dict[str, object]:
+    """Create a user-owned conversation once, or return its existing record."""
+    init_auth_db()
+    now = int(time.time())
+    with _connection() as db:
+        row = db.execute(
+            "SELECT id, user_id, thread_id, title, created_at, updated_at FROM conversations WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+        if row:
+            if int(row["user_id"]) != user_id:
+                raise PermissionError("conversation does not belong to the current user")
+            return dict(row)
+        cursor = db.execute(
+            "INSERT INTO conversations(user_id, thread_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, thread_id, _conversation_title(first_message), now, now),
+        )
+        return {
+            "id": int(cursor.lastrowid), "user_id": user_id, "thread_id": thread_id,
+            "title": _conversation_title(first_message), "created_at": now, "updated_at": now,
+        }
+
+
+def append_message(user_id: int, thread_id: str, role: str, content: str) -> None:
+    """Append a visible chat message and update the owning conversation timestamp."""
+    if role not in {"user", "assistant"}:
+        raise ValueError("unsupported message role")
+    conversation = ensure_conversation(user_id, thread_id, content)
+    now = int(time.time())
+    with _connection() as db:
+        db.execute(
+            "INSERT INTO messages(conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            (conversation["id"], role, content, now),
+        )
+        db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conversation["id"]))
+
+
+def list_conversations(user_id: int) -> list[dict[str, object]]:
+    init_auth_db()
+    with _connection() as db:
+        rows = db.execute(
+            "SELECT thread_id, title, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY updated_at DESC, id DESC",
+            (user_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_conversation_messages(user_id: int, thread_id: str) -> list[dict[str, object]]:
+    init_auth_db()
+    with _connection() as db:
+        conversation = db.execute(
+            "SELECT id FROM conversations WHERE user_id = ? AND thread_id = ?", (user_id, thread_id)
+        ).fetchone()
+        if not conversation:
+            raise LookupError("conversation not found")
+        rows = db.execute(
+            "SELECT role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+            (conversation["id"],),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def rename_conversation(user_id: int, thread_id: str, title: str) -> None:
+    init_auth_db()
+    cleaned = " ".join(title.split())[:120]
+    if not cleaned:
+        raise ValueError("conversation title cannot be empty")
+    with _connection() as db:
+        cursor = db.execute(
+            "UPDATE conversations SET title = ?, updated_at = ? WHERE user_id = ? AND thread_id = ?",
+            (cleaned, int(time.time()), user_id, thread_id),
+        )
+        if cursor.rowcount == 0:
+            raise LookupError("conversation not found")
+
+
+def delete_conversation(user_id: int, thread_id: str) -> bool:
+    init_auth_db()
+    with _connection() as db:
+        cursor = db.execute(
+            "DELETE FROM conversations WHERE user_id = ? AND thread_id = ?", (user_id, thread_id)
+        )
+    return cursor.rowcount > 0
+
+
+def delete_all_conversations(user_id: int) -> int:
+    init_auth_db()
+    with _connection() as db:
+        cursor = db.execute("DELETE FROM conversations WHERE user_id = ?", (user_id,))
+    return cursor.rowcount
