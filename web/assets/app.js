@@ -12,7 +12,6 @@ const accountUsername = document.querySelector("#account-username");
 const logoutButton = document.querySelector("#logout-button");
 const authPanel = document.querySelector("#auth-panel");
 const authForm = document.querySelector("#auth-form");
-const authTitle = document.querySelector("#auth-title");
 const authError = document.querySelector("#auth-error");
 const authUsername = document.querySelector("#auth-username");
 const authPassword = document.querySelector("#auth-password");
@@ -20,7 +19,6 @@ const authConfirmPassword = document.querySelector("#auth-confirm-password");
 const authConfirmGroup = document.querySelector("#auth-confirm-group");
 const authLoginTab = document.querySelector("#auth-login-tab");
 const authRegisterTab = document.querySelector("#auth-register-tab");
-const authDescription = document.querySelector("#auth-description");
 const authSubmit = document.querySelector("#auth-submit");
 const sidebarNewChatButton = document.querySelector("#sidebar-new-chat");
 const conversationList = document.querySelector("#conversation-list");
@@ -39,9 +37,6 @@ const appLayout = document.querySelector(".app-layout");
 const sidebarToggle = document.querySelector("#sidebar-toggle");
 const mobileSidebarToggle = document.querySelector("#mobile-sidebar-toggle");
 const sidebarScrim = document.querySelector("#sidebar-scrim");
-
-sendButton.textContent = "发送";
-sendButton.setAttribute("aria-label", "发送消息");
 
 const state = {
   threadId: "",
@@ -444,10 +439,6 @@ function setAuthMode(mode) {
   authRegisterTab.classList.toggle("active", registering);
   authLoginTab.setAttribute("aria-selected", String(!registering));
   authRegisterTab.setAttribute("aria-selected", String(registering));
-  authTitle.textContent = registering ? "注册 NBA Chat" : "登录 NBA Chat";
-  authDescription.textContent = registering
-    ? "创建账号后即可开始独立的 NBA 对话。"
-    : "登录后，对话和 Agent 上下文会按账号隔离。";
   authSubmit.textContent = registering ? "创建账号" : "登录";
   authConfirmGroup.hidden = !registering;
   authConfirmPassword.required = registering;
@@ -455,11 +446,16 @@ function setAuthMode(mode) {
   authError.textContent = "";
 }
 
-function showAuth(mode = "login") {
-  setAuthMode(mode);
+function showAuth(mode = "login", focusInput = false) {
+  // Health checks may call this repeatedly while the service is starting.
+  // Avoid rewriting the form on every poll: DOM text updates reset DevTools
+  // selections and make the login screen appear to flicker.
+  const nextMode = mode === "register" && state.registrationEnabled ? "register" : "login";
+  if (authPanel.hidden || state.authMode !== nextMode) setAuthMode(nextMode);
   accountActions.hidden = true;
+  const wasHidden = authPanel.hidden;
   authPanel.hidden = false;
-  authUsername.focus();
+  if (focusInput && wasHidden) authUsername.focus();
 }
 
 async function loadUser() {
@@ -477,6 +473,12 @@ async function checkHealth() {
     state.registrationEnabled = data.registration_enabled !== false;
     authRegisterTab.hidden = !state.registrationEnabled;
     statusDot.classList.toggle("ready", data.agent_ready);
+    if (!data.database_ready) {
+      showAuth("login", false);
+      statusText.textContent = data.status === "error" ? "服务初始化失败" : "正在启动…";
+      window.setTimeout(checkHealth, 800);
+      return;
+    }
     const authenticated = data.auth_required ? await loadUser() : true;
     if (!data.auth_required) {
       state.user = { id: "guest", username: "guest" };
@@ -705,4 +707,5 @@ document.addEventListener("keydown", (event) => {
 });
 
 setSidebarCollapsed(localStorage.getItem("nba-chat-sidebar-collapsed") === "true", false);
+showAuth("login", true);
 checkHealth();
