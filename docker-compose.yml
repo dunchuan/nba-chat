@@ -1,7 +1,11 @@
 services:
-  nba-chat:
+  nba-chat-app:
     build: .
-    container_name: nba-chat
+    image: nba-chat-app:latest
+    container_name: nba-chat-app
+    depends_on:
+      nba-chat-db:
+        condition: service_healthy
     env_file:
       - .env
     ports:
@@ -9,3 +13,22 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+
+  nba-chat-db:
+    image: postgres:16
+    container_name: nba-chat-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

@@ -1,5 +1,5 @@
 services:
-  nba-chat:
+  nba-chat-app:
     volumes:
       # Local development only: serve the current frontend files without rebuilding.
       - ./web:/app/web:ro
