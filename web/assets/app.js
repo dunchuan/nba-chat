@@ -856,6 +856,7 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
 
 function startNewConversation() {
   resetConversation();
+  setMobileSidebarOpen(false);
   input.focus();
 }
 
