@@ -82,6 +82,9 @@ Live 测试会消耗模型和第三方 API 配额，并可能受网络、代理�
 | `REACT_MAX_STEPS` | 单次 ReAct 最大工具步骤数 |
 | `LANGGRAPH_RECURSION_LIMIT` | LangGraph 递归安全上限 |
 | `DATABASE_URL` | PostgreSQL 数据库连接字符串 |
+| `DB_POOL_MIN_SIZE` | 应用 PostgreSQL 连接池的最小连接数，默认 `2` |
+| `DB_POOL_MAX_SIZE` | 应用 PostgreSQL 连接池的最大连接数，默认 `10` |
+| `DB_POOL_TIMEOUT` | 从连接池获取连接的最长等待时间（秒），默认 `10` |
 | `AUTH_REQUIRED` | 是否要求登录，默认 `true` |
 | `REGISTRATION_ENABLED` | 是否允许注册，默认 `true` |
 | `SESSION_MAX_AGE` | 登录会话有效期（秒），默认 7 天 |

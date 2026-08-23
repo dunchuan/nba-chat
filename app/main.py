@@ -29,6 +29,7 @@ from app.tools import get_tool_registry
 from app.auth import (
     authenticate,
     append_message,
+    close_connection_pool,
     create_session,
     create_user,
     delete_all_conversations,
@@ -36,6 +37,7 @@ from app.auth import (
     get_conversation_messages,
     delete_session,
     DATABASE_URL,
+    init_connection_pool,
     list_conversations,
     normalize_username,
     rename_conversation,
@@ -124,6 +126,7 @@ async def _monitor_backend(application: FastAPI) -> None:
 async def lifespan(application: FastAPI):
     """Run backend monitoring without blocking the first HTML response."""
     global _monitor_task, graph, _checkpointer_owner
+    init_connection_pool()
     _monitor_task = asyncio.create_task(_monitor_backend(application))
     try:
         yield
@@ -132,6 +135,7 @@ async def lifespan(application: FastAPI):
             _monitor_task.cancel()
             await asyncio.gather(_monitor_task, return_exceptions=True)
         await _close_backend(application)
+        close_connection_pool()
 
 
 app = FastAPI(title="NBA Chat", version="1.0.0", lifespan=lifespan)

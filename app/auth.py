@@ -4,11 +4,13 @@ import hashlib
 import hmac
 import os
 import secrets
+import threading
 import time
 from contextlib import contextmanager
 from typing import Iterator
 
 import psycopg
+from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 
 DATABASE_URL = os.getenv("DATABASE_URL") or (
@@ -18,9 +20,46 @@ DATABASE_URL = os.getenv("DATABASE_URL") or (
         database=os.environ["POSTGRES_DB"],
     )
 )
+
+DB_POOL_MIN_SIZE = max(1, int(os.getenv("DB_POOL_MIN_SIZE", "2")))
+DB_POOL_MAX_SIZE = max(DB_POOL_MIN_SIZE, int(os.getenv("DB_POOL_MAX_SIZE", "10")))
+DB_POOL_TIMEOUT = max(1.0, float(os.getenv("DB_POOL_TIMEOUT", "10")))
+_pool: ConnectionPool | None = None
+_pool_lock = threading.Lock()
+
+
+def init_connection_pool() -> ConnectionPool:
+    """Create the shared pool used by auth and conversation APIs."""
+    global _pool
+    if _pool is not None:
+        return _pool
+    with _pool_lock:
+        if _pool is None:
+            pool = ConnectionPool(
+                conninfo=DATABASE_URL,
+                min_size=DB_POOL_MIN_SIZE,
+                max_size=DB_POOL_MAX_SIZE,
+                timeout=DB_POOL_TIMEOUT,
+                kwargs={"row_factory": dict_row},
+                open=False,
+            )
+            pool.open(wait=False)
+            _pool = pool
+    return _pool
+
+
+def close_connection_pool() -> None:
+    global _pool
+    with _pool_lock:
+        pool, _pool = _pool, None
+        if pool is not None:
+            pool.close()
+
+
 @contextmanager
 def _connection() -> Iterator[psycopg.Connection]:
-    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as connection:
+    pool = init_connection_pool()
+    with pool.connection() as connection:
         yield connection
 
 
