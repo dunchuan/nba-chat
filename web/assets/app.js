@@ -379,7 +379,7 @@ async function selectConversation(threadId) {
     recoverPendingMessage(threadId);
     updateComposerState();
     renderConversationList();
-    scrollToLatest();
+    scrollToLatest("auto");
   } catch (error) {
     console.error(error);
   }
@@ -483,11 +483,11 @@ async function deleteSelectedConversation() {
   await loadConversations();
 }
 
-function scrollToLatest() {
+function scrollToLatest(behavior = "smooth") {
   const scroll = () => {
     workspace.scrollTo({
       top: workspace.scrollHeight,
-      behavior: "smooth",
+      behavior,
     });
   };
 
