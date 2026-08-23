@@ -144,6 +144,7 @@ AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "true").strip().lower() == "true"
 REGISTRATION_ENABLED = os.getenv("REGISTRATION_ENABLED", "true").strip().lower() == "true"
 SESSION_MAX_AGE = max(3600, int(os.getenv("SESSION_MAX_AGE", str(7 * 24 * 3600))))
 _active_chat_threads: set[tuple[str, str]] = set()
+_background_chat_tasks: set[asyncio.Task] = set()
 
 
 def _chat_lock_key(user_id: object, thread_id: str) -> tuple[str, str]:
@@ -161,6 +162,93 @@ def _try_acquire_chat_slot(user_id: object, thread_id: str) -> bool:
 
 def _release_chat_slot(user_id: object, thread_id: str) -> None:
     _active_chat_threads.discard(_chat_lock_key(user_id, thread_id))
+
+
+async def _run_chat_generation(
+    active_graph,
+    user: dict[str, object],
+    thread_id: str,
+    message: str,
+    audit_fields: dict[str, object],
+    started_at: float,
+    queue: asyncio.Queue,
+) -> None:
+    """Run generation independently from the browser's streaming connection."""
+    final_result = {}
+    streamed_text = ""
+    try:
+        async for event in active_graph.astream_events(
+            {"messages": [HumanMessage(content=message)]},
+            version="v2",
+            config={
+                "recursion_limit": max(24, int(os.getenv("LANGGRAPH_RECURSION_LIMIT", "40"))),
+                "configurable": {"thread_id": agent_thread_id(user["id"], thread_id)},
+                "tags": ["nba-chat", "web-chat"],
+                "metadata": {
+                    "thread_id": thread_id,
+                    "user_id": user["id"],
+                    "input_length": len(message),
+                },
+            },
+        ):
+            if event.get("event") == "on_chat_model_stream":
+                text = _chunk_text(event.get("data", {}).get("chunk"))
+                if text:
+                    streamed_text += text
+                    await queue.put(_stream_event("token", content=text))
+            output = event.get("data", {}).get("output")
+            if isinstance(output, dict) and output.get("messages"):
+                final_result = output
+
+        messages = final_result.get("messages") or []
+        answer = _chunk_text(messages[-1]) if messages else streamed_text
+        if answer:
+            await asyncio.to_thread(append_message, int(user["id"]), thread_id, "assistant", answer)
+        await queue.put(_stream_event(
+            "metadata",
+            thread_id=thread_id,
+            intent=str(final_result.get("intent") or "general"),
+            resolved_query=str(final_result.get("resolved_query") or ""),
+            analysis_level=str(final_result.get("analysis_level") or "none"),
+            web_search_used=bool(final_result.get("web_search_used")),
+            game_data_used=bool(final_result.get("game_data_used")),
+            nba_api_game_used=bool(final_result.get("nba_api_game_used")),
+            player_data_used=bool(final_result.get("player_data_used")),
+            game_time_used=bool(final_result.get("game_time_used")),
+            play_by_play_used=bool(final_result.get("play_by_play_used")),
+            router_used=bool(final_result.get("router_used")),
+            deep_analysis_used=bool(final_result.get("needs_deep_analysis")),
+            retrieval_game_id=str(final_result.get("retrieval_game_id") or ""),
+            cache_hit=bool(final_result.get("cache_hit")),
+            answer=answer,
+        ))
+        _audit_log(
+            "chat_completed",
+            **audit_fields,
+            elapsed_seconds=round(time.perf_counter() - started_at, 3),
+            intent=str(final_result.get("intent") or "general"),
+            analysis_level=str(final_result.get("analysis_level") or "none"),
+            retrieval_game_id=str(final_result.get("retrieval_game_id") or ""),
+            cache_hit=bool(final_result.get("cache_hit")),
+            nba_api_game_used=bool(final_result.get("nba_api_game_used")),
+            player_data_used=bool(final_result.get("player_data_used")),
+            game_time_used=bool(final_result.get("game_time_used")),
+            play_by_play_used=bool(final_result.get("play_by_play_used")),
+            web_search_used=bool(final_result.get("web_search_used")),
+        )
+        await queue.put(_stream_event("done"))
+    except Exception as exc:
+        _audit_log(
+            "chat_failed",
+            **audit_fields,
+            elapsed_seconds=round(time.perf_counter() - started_at, 3),
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        await queue.put(_stream_event("error", message=f"Agent 调用失败：{exc}"))
+    finally:
+        _release_chat_slot(user["id"], thread_id)
+        await queue.put(None)
 
 
 def _ensure_backend_ready() -> None:
@@ -486,84 +574,26 @@ async def chat(
     }
     _audit_log("chat_request", **audit_fields, message=message, input_length=len(message))
 
+    queue = asyncio.Queue()
+    active_graph = graph
+    task = asyncio.create_task(_run_chat_generation(
+        active_graph,
+        user,
+        thread_id,
+        message,
+        audit_fields,
+        started_at,
+        queue,
+    ))
+    _background_chat_tasks.add(task)
+    task.add_done_callback(_background_chat_tasks.discard)
+
     async def stream_response():
-        final_result = {}
-        streamed_text = ""
-        try:
-            async for event in graph.astream_events(
-                {"messages": [HumanMessage(content=message)]},
-                version="v2",
-                config={
-                    # LangGraph super-step safety limit. This is separate
-                    # from the per-request ReAct budget in native_agent.py.
-                    "recursion_limit": max(24, int(os.getenv("LANGGRAPH_RECURSION_LIMIT", "40"))),
-                    "configurable": {"thread_id": agent_thread_id(user["id"], thread_id)},
-                    "tags": ["nba-chat", "web-chat"],
-                    "metadata": {
-                        "thread_id": thread_id,
-                        "user_id": user["id"],
-                        "input_length": len(message),
-                    },
-                },
-            ):
-                if event.get("event") == "on_chat_model_stream":
-                    text = _chunk_text(event.get("data", {}).get("chunk"))
-                    if text:
-                        streamed_text += text
-                        yield _stream_event("token", content=text)
-                output = event.get("data", {}).get("output")
-                if isinstance(output, dict) and output.get("messages"):
-                    final_result = output
-
-            messages = final_result.get("messages") or []
-            answer = _chunk_text(messages[-1]) if messages else streamed_text
-            if answer:
-                await asyncio.to_thread(append_message, int(user["id"]), thread_id, "assistant", answer)
-            yield _stream_event(
-                "metadata",
-                thread_id=thread_id,
-                intent=str(final_result.get("intent") or "general"),
-                resolved_query=str(final_result.get("resolved_query") or ""),
-                analysis_level=str(final_result.get("analysis_level") or "none"),
-                web_search_used=bool(final_result.get("web_search_used")),
-                game_data_used=bool(final_result.get("game_data_used")),
-                nba_api_game_used=bool(final_result.get("nba_api_game_used")),
-                player_data_used=bool(final_result.get("player_data_used")),
-                game_time_used=bool(final_result.get("game_time_used")),
-                play_by_play_used=bool(final_result.get("play_by_play_used")),
-                router_used=bool(final_result.get("router_used")),
-                deep_analysis_used=bool(final_result.get("needs_deep_analysis")),
-                retrieval_game_id=str(final_result.get("retrieval_game_id") or ""),
-                cache_hit=bool(final_result.get("cache_hit")),
-                answer=answer,
-            )
-            _audit_log(
-                "chat_completed",
-                **audit_fields,
-                elapsed_seconds=round(time.perf_counter() - started_at, 3),
-                intent=str(final_result.get("intent") or "general"),
-                analysis_level=str(final_result.get("analysis_level") or "none"),
-                retrieval_game_id=str(final_result.get("retrieval_game_id") or ""),
-                cache_hit=bool(final_result.get("cache_hit")),
-                nba_api_game_used=bool(final_result.get("nba_api_game_used")),
-                player_data_used=bool(final_result.get("player_data_used")),
-                game_time_used=bool(final_result.get("game_time_used")),
-                play_by_play_used=bool(final_result.get("play_by_play_used")),
-                web_search_used=bool(final_result.get("web_search_used")),
-            )
-            yield _stream_event("done")
-        except Exception as exc:
-            _audit_log(
-                "chat_failed",
-                **audit_fields,
-                elapsed_seconds=round(time.perf_counter() - started_at, 3),
-                error_type=type(exc).__name__,
-                error=str(exc),
-            )
-            yield _stream_event("error", message=f"Agent 调用失败：{exc}")
-
-        finally:
-            _release_chat_slot(user["id"], thread_id)
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield event
 
     return StreamingResponse(
         stream_response(),

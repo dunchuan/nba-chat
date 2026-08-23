@@ -37,6 +37,11 @@ const appLayout = document.querySelector(".app-layout");
 const sidebarToggle = document.querySelector("#sidebar-toggle");
 const mobileSidebarToggle = document.querySelector("#mobile-sidebar-toggle");
 const sidebarScrim = document.querySelector("#sidebar-scrim");
+const appNotice = document.querySelector("#app-notice");
+let touchStartX = 0;
+let touchStartY = 0;
+let trackingSidebarSwipe = false;
+let noticeTimer = null;
 
 const state = {
   threadId: "",
@@ -44,15 +49,91 @@ const state = {
   busy: false,
   controller: null,
   user: null,
+  authStatus: "loading",
   authMode: "login",
   registrationEnabled: true,
   conversations: [],
   renamingThreadId: "",
   deletingThreadId: "",
+  pendingRecoveryTimer: null,
 };
 
 function threadStorageKey() {
   return state.user ? `nba-chat-thread-${state.user.id}` : "nba-chat-thread";
+}
+
+function notify(message) {
+  if (!appNotice) return;
+  appNotice.textContent = message;
+  appNotice.hidden = false;
+  if (noticeTimer) window.clearTimeout(noticeTimer);
+  noticeTimer = window.setTimeout(() => {
+    appNotice.hidden = true;
+  }, 3000);
+}
+
+function pendingStorageKey() {
+  return state.user ? `nba-chat-pending-${state.user.id}` : "";
+}
+
+function markPendingMessage(threadId) {
+  const key = pendingStorageKey();
+  if (!key) return;
+  localStorage.setItem(key, JSON.stringify({ threadId, startedAt: Date.now() }));
+}
+
+function getPendingMessage() {
+  const key = pendingStorageKey();
+  if (!key) return null;
+  try {
+    const pending = JSON.parse(localStorage.getItem(key) || "null");
+    if (!pending?.threadId || Date.now() - Number(pending.startedAt) > 15 * 60 * 1000) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    return pending;
+  } catch {
+    localStorage.removeItem(key);
+    return null;
+  }
+}
+
+function clearPendingMessage(threadId = "") {
+  const key = pendingStorageKey();
+  if (!key) return;
+  const pending = getPendingMessage();
+  if (!threadId || pending?.threadId === threadId) localStorage.removeItem(key);
+}
+
+function isAuthenticated() {
+  return state.authStatus === "authenticated";
+}
+
+function isAppReady() {
+  return state.authStatus === "authenticated" || state.authStatus === "anonymous";
+}
+
+function applyAuthState(status, user = null) {
+  state.authStatus = status;
+  state.user = user;
+  const appReady = isAppReady();
+  const authenticated = isAuthenticated();
+  document.querySelector(".shell")?.classList.toggle("auth-ready", appReady);
+  authPanel.hidden = appReady;
+  accountActions.hidden = !authenticated;
+  accountUsername.textContent = authenticated ? user.username : "";
+  updateSidebarControls();
+}
+
+function updateSidebarControls() {
+  const enabled = isAuthenticated();
+  if (!enabled) setMobileSidebarOpen(false);
+  [sidebarToggle, mobileSidebarToggle].forEach((button) => {
+    if (!button) return;
+    button.disabled = !enabled;
+    button.style.display = enabled ? "" : "none";
+    button.setAttribute("aria-disabled", String(!enabled));
+  });
 }
 
 function setSidebarCollapsed(collapsed, persistPreference = true) {
@@ -65,10 +146,16 @@ function setSidebarCollapsed(collapsed, persistPreference = true) {
   if (persistPreference) localStorage.setItem("nba-chat-sidebar-collapsed", String(collapsed));
 }
 
-function updateAccountActions() {
-  const authenticated = Boolean(state.user && state.user.id !== "guest");
-  accountActions.hidden = !authenticated;
-  accountUsername.textContent = authenticated ? state.user.username : "";
+function setMobileSidebarOpen(open) {
+  appLayout?.classList.toggle("mobile-sidebar-open", open);
+  if (mobileSidebarToggle) {
+    const label = open ? "关闭会话历史" : "打开会话历史";
+    mobileSidebarToggle.textContent = open ? "‹" : "›";
+    mobileSidebarToggle.hidden = false;
+    mobileSidebarToggle.style.display = open ? "none" : "";
+    mobileSidebarToggle.setAttribute("aria-label", label);
+    mobileSidebarToggle.setAttribute("title", label);
+  }
 }
 
 function conversationTitle(messages) {
@@ -185,6 +272,49 @@ async function restoreConversation() {
     intro.hidden = false;
   }
   renderConversationList();
+  recoverPendingMessage(selected?.id);
+}
+
+function recoverPendingMessage(threadId) {
+  if (!threadId) return;
+  const pending = getPendingMessage();
+  const selectedConversation = state.conversations.find((conversation) => conversation.id === threadId);
+  const recentlyUpdated = selectedConversation && Date.now() - selectedConversation.updatedAt < 15 * 60 * 1000;
+  const lastMessageIsUser = state.messages.at(-1)?.role === "user";
+  if ((!pending || pending.threadId !== threadId) && !(recentlyUpdated && lastMessageIsUser)) return;
+  if (state.messages.some((message) => message.role === "assistant")) {
+    clearPendingMessage(threadId);
+    return;
+  }
+  const article = addMessage("assistant", "正在思考…", false);
+  article.classList.add("pending");
+  pollPendingMessage(threadId, article);
+}
+
+function pollPendingMessage(threadId, article) {
+  if (state.pendingRecoveryTimer) window.clearTimeout(state.pendingRecoveryTimer);
+  const poll = async () => {
+    if (!isAuthenticated() || state.threadId !== threadId || !article.isConnected) return;
+    try {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(threadId)}`);
+      if (response.status === 404) {
+        clearPendingMessage(threadId);
+        return;
+      }
+      if (!response.ok) throw new Error("pending conversation unavailable");
+      const data = await response.json();
+      if (data.messages?.some((message) => message.role === "assistant")) {
+        clearPendingMessage(threadId);
+        await loadConversationMessages(threadId);
+        await loadConversations();
+        return;
+      }
+      state.pendingRecoveryTimer = window.setTimeout(poll, 2000);
+    } catch {
+      state.pendingRecoveryTimer = window.setTimeout(poll, 3000);
+    }
+  };
+  state.pendingRecoveryTimer = window.setTimeout(poll, 1500);
 }
 
 async function loadConversationMessages(threadId) {
@@ -213,7 +343,15 @@ async function selectConversation(threadId) {
 }
 
 function openClearConversationsModal() {
-  if (!clearConversationsModal || state.busy || !state.conversations.length) return;
+  if (!clearConversationsModal) return;
+  if (state.busy) {
+    notify("正在生成回答，请等待完成后再删除对话");
+    return;
+  }
+  if (!state.conversations.length) {
+    notify("当前没有可删除的对话");
+    return;
+  }
   clearConversationsModal.hidden = false;
   clearConversationsCancel?.focus();
 }
@@ -261,14 +399,22 @@ async function saveConversationRename() {
 
 async function clearAllConversations() {
   const response = await fetch("/api/conversations", { method: "DELETE" });
-  if (!response.ok) return;
+  if (!response.ok) {
+    notify("清空对话失败，请稍后重试");
+    return;
+  }
+  clearPendingMessage();
   state.conversations = [];
   closeClearConversationsModal();
   resetConversation();
 }
 
 function openDeleteConversationModal(threadId) {
-  if (!deleteConversationModal || state.busy) return;
+  if (!deleteConversationModal) return;
+  if (state.busy) {
+    notify("正在生成回答，请等待完成后再删除对话");
+    return;
+  }
   state.deletingThreadId = threadId;
   deleteConversationModal.hidden = false;
   deleteConversationCancel?.focus();
@@ -284,7 +430,11 @@ async function deleteSelectedConversation() {
   const threadId = state.deletingThreadId;
   if (!threadId) return;
   const response = await fetch(`/api/conversations/${encodeURIComponent(threadId)}`, { method: "DELETE" });
-  if (!response.ok) return;
+  if (!response.ok) {
+    notify("删除对话失败，请稍后重试");
+    return;
+  }
+  clearPendingMessage(threadId);
   closeDeleteConversationModal();
   if (threadId === state.threadId) resetConversation();
   await loadConversations();
@@ -426,12 +576,6 @@ function addMessage(role, content, save = true, webSearchUsed = false, gameDataU
   return article;
 }
 
-function hideAuth() {
-  authPanel.hidden = true;
-  updateAccountActions();
-  authError.textContent = "";
-}
-
 function setAuthMode(mode) {
   state.authMode = mode === "register" && state.registrationEnabled ? "register" : "login";
   const registering = state.authMode === "register";
@@ -451,19 +595,16 @@ function showAuth(mode = "login", focusInput = false) {
   // Avoid rewriting the form on every poll: DOM text updates reset DevTools
   // selections and make the login screen appear to flicker.
   const nextMode = mode === "register" && state.registrationEnabled ? "register" : "login";
-  if (authPanel.hidden || state.authMode !== nextMode) setAuthMode(nextMode);
-  accountActions.hidden = true;
   const wasHidden = authPanel.hidden;
-  authPanel.hidden = false;
+  applyAuthState("unauthenticated");
+  if (state.authMode !== nextMode) setAuthMode(nextMode);
   if (focusInput && wasHidden) authUsername.focus();
 }
 
 async function loadUser() {
   const response = await fetch("/api/auth/me");
   if (!response.ok) return false;
-  state.user = await response.json();
-  updateAccountActions();
-  return true;
+  return await response.json();
 }
 
 async function checkHealth() {
@@ -479,19 +620,15 @@ async function checkHealth() {
       window.setTimeout(checkHealth, 800);
       return;
     }
-    const authenticated = data.auth_required ? await loadUser() : true;
-    if (!data.auth_required) {
-      state.user = { id: "guest", username: "guest" };
-      hideAuth();
-      accountActions.hidden = true;
-    }
-    if (!authenticated) {
-      updateAccountActions();
+    const user = data.auth_required ? await loadUser() : { id: "guest", username: "guest" };
+    if (!user) {
       showAuth();
       statusText.textContent = "请先登录";
       return;
     }
+    state.user = user;
     await restoreConversation();
+    applyAuthState(data.auth_required ? "authenticated" : "anonymous", user);
     statusText.textContent = data.agent_ready ? "NBA Chat 在线" : "等待配置";
   } catch {
     statusText.textContent = "正在唤醒";
@@ -500,13 +637,15 @@ async function checkHealth() {
 
 async function submitMessage(message) {
   if (state.busy || !message.trim()) return;
+  const normalizedMessage = message.trim();
   state.busy = true;
   input.value = "";
   input.style.height = "auto";
   sendButton.disabled = true;
   stopButton.hidden = false;
   state.controller = new AbortController();
-  addMessage("user", message.trim());
+  addMessage("user", normalizedMessage);
+  markPendingMessage(state.threadId);
 
   const pending = addMessage("assistant", "正在思考…", false);
   pending.classList.add("pending");
@@ -517,7 +656,7 @@ async function submitMessage(message) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: state.controller.signal,
-      body: JSON.stringify({ message: message.trim(), thread_id: state.threadId }),
+      body: JSON.stringify({ message: normalizedMessage, thread_id: state.threadId }),
     });
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
@@ -556,6 +695,7 @@ async function submitMessage(message) {
       if (event.type === "metadata") metadata = event;
     }
     pending.remove();
+    clearPendingMessage(state.threadId);
     addMessage("assistant", metadata.answer || answer, true, metadata.web_search_used, metadata.game_data_used, metadata.player_data_used, metadata.nba_api_game_used);
     await loadConversations();
     scrollToLatest();
@@ -567,6 +707,7 @@ async function submitMessage(message) {
       pending.classList.add("stopped");
       return;
     }
+    clearPendingMessage(state.threadId);
     pending.querySelector(".message-text").textContent = error.message;
     pending.classList.remove("pending");
     pending.classList.add("error");
@@ -585,10 +726,9 @@ stopButton.addEventListener("click", () => {
 
 logoutButton.addEventListener("click", async () => {
   await fetch("/api/auth/logout", { method: "POST" });
-  state.user = null;
+  applyAuthState("unauthenticated");
   state.messages = [];
   chat.replaceChildren();
-  updateAccountActions();
   showAuth();
 });
 
@@ -625,8 +765,7 @@ authForm.addEventListener("submit", async (event) => {
 
     state.user = data;
     await restoreConversation();
-    updateAccountActions();
-    hideAuth();
+    applyAuthState("authenticated", data);
     statusText.textContent = "NBA Chat 在线";
     authPassword.value = "";
     authConfirmPassword.value = "";
@@ -687,18 +826,45 @@ clearConversationsModal?.addEventListener("click", (event) => {
   if (event.target === clearConversationsModal) closeClearConversationsModal();
 });
 sidebarToggle?.addEventListener("click", () => {
+  if (!isAuthenticated()) return;
   if (window.matchMedia("(max-width: 620px)").matches) {
-    appLayout?.classList.remove("mobile-sidebar-open");
+    setMobileSidebarOpen(false);
     return;
   }
   setSidebarCollapsed(!appLayout?.classList.contains("sidebar-collapsed"));
 });
 mobileSidebarToggle?.addEventListener("click", () => {
-  appLayout?.classList.toggle("mobile-sidebar-open");
+  if (!isAuthenticated()) return;
+  setMobileSidebarOpen(!appLayout?.classList.contains("mobile-sidebar-open"));
 });
 sidebarScrim?.addEventListener("click", () => {
-  appLayout?.classList.remove("mobile-sidebar-open");
+  setMobileSidebarOpen(false);
 });
+
+document.addEventListener("touchstart", (event) => {
+  if (!isAuthenticated() || !window.matchMedia("(max-width: 620px)").matches) return;
+  const sidebarOpen = appLayout?.classList.contains("mobile-sidebar-open");
+  const touch = event.touches[0];
+  if (!touch) return;
+  touchStartX = touch.clientX;
+  touchStartY = touch.clientY;
+  trackingSidebarSwipe = true;
+}, { passive: true });
+
+document.addEventListener("touchend", (event) => {
+  if (!trackingSidebarSwipe) return;
+  trackingSidebarSwipe = false;
+  if (!isAuthenticated() || !window.matchMedia("(max-width: 620px)").matches) return;
+  const touch = event.changedTouches[0];
+  if (!touch) return;
+  const deltaX = touch.clientX - touchStartX;
+  const deltaY = Math.abs(touch.clientY - touchStartY);
+  if (Math.abs(deltaX) < 60 || Math.abs(deltaX) < deltaY * 1.25) return;
+  const sidebarOpen = appLayout?.classList.contains("mobile-sidebar-open");
+  if (!sidebarOpen && deltaX > 0) setMobileSidebarOpen(true);
+  if (sidebarOpen && deltaX < 0) setMobileSidebarOpen(false);
+}, { passive: true });
+
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (!renameConversationModal?.hidden) closeRenameConversationModal();
@@ -707,5 +873,6 @@ document.addEventListener("keydown", (event) => {
 });
 
 setSidebarCollapsed(localStorage.getItem("nba-chat-sidebar-collapsed") === "true", false);
-showAuth("login", true);
+setMobileSidebarOpen(false);
+applyAuthState("loading");
 checkHealth();

@@ -163,7 +163,8 @@ def delete_agent_thread_state(user_id: int | str, conversation_thread_id: str) -
     import psycopg
     with psycopg.connect(DATABASE_URL) as connection:
         with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM writes WHERE thread_id = %s", (thread_id,))
+            cursor.execute("DELETE FROM checkpoint_writes WHERE thread_id = %s", (thread_id,))
+            cursor.execute("DELETE FROM checkpoint_blobs WHERE thread_id = %s", (thread_id,))
             cursor.execute("DELETE FROM checkpoints WHERE thread_id = %s", (thread_id,))
 
 
@@ -173,7 +174,8 @@ def delete_all_agent_thread_state(user_id: int | str) -> None:
     import psycopg
     with psycopg.connect(DATABASE_URL) as connection:
         with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM writes WHERE thread_id LIKE %s", (prefix,))
+            cursor.execute("DELETE FROM checkpoint_writes WHERE thread_id LIKE %s", (prefix,))
+            cursor.execute("DELETE FROM checkpoint_blobs WHERE thread_id LIKE %s", (prefix,))
             cursor.execute("DELETE FROM checkpoints WHERE thread_id LIKE %s", (prefix,))
 
 

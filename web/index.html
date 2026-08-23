@@ -6,7 +6,7 @@
     <meta name="description" content="NBA Chat：面向中文球迷的 NBA 智能问答助手" />
     <title>NBA Chat · NBA 智能问答助手</title>
     <link rel="icon" type="image/x-icon" href="/assets/nba-favicon.ico" />
-    <link rel="stylesheet" href="/assets/styles.css?v=45" />
+    <link rel="stylesheet" href="/assets/styles.css?v=61" />
   </head>
   <body>
     <div class="shell">
@@ -14,7 +14,7 @@
         <a class="brand" href="/" aria-label="NBA Chat 首页">
           <span class="brand-mark"><img src="/assets/nba-logo.svg" alt="NBA" /></span>
         </a>
-        <button class="mobile-sidebar-toggle" id="mobile-sidebar-toggle" type="button" aria-label="Open conversation history" title="Conversation history">☰</button>
+        <button class="mobile-sidebar-toggle" id="mobile-sidebar-toggle" type="button" aria-label="打开会话历史" title="打开会话历史">›</button>
         <div class="status"><span class="status-dot" id="status-dot"></span><span id="status-text">连接中</span></div>
         <div class="account-actions" id="account-actions" hidden>
           <span class="account-username" id="account-username"></span>
@@ -59,7 +59,7 @@
         <section class="chat" id="chat" aria-live="polite" aria-label="对话记录"></section>
       </main>
 
-      <section class="auth-panel" id="auth-panel" hidden>
+      <section class="auth-panel" id="auth-panel">
         <form id="auth-form" class="auth-card">
           <div class="auth-tabs" role="tablist" aria-label="账号操作">
             <button id="auth-login-tab" class="auth-tab active" type="button" role="tab" aria-selected="true">登录</button>
@@ -127,7 +127,10 @@
       </footer>
         </div>
       </div>
+
+      <div class="app-notice" id="app-notice" role="status" aria-live="polite" hidden></div>
+
     </div>
-    <script src="/assets/app.js?v=41" defer></script>
+    <script src="/assets/app.js?v=57" defer></script>
   </body>
 </html>
