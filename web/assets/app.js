@@ -56,6 +56,7 @@ const state = {
   renamingThreadId: "",
   deletingThreadId: "",
   pendingRecoveryTimer: null,
+  conversationRuntime: new Map(),
 };
 
 function threadStorageKey() {
@@ -72,18 +73,18 @@ function notify(message) {
   }, 3000);
 }
 
-function pendingStorageKey() {
-  return state.user ? `nba-chat-pending-${state.user.id}` : "";
+function pendingStorageKey(threadId = state.threadId) {
+  return state.user && threadId ? `nba-chat-pending-${state.user.id}-${threadId}` : "";
 }
 
 function markPendingMessage(threadId) {
-  const key = pendingStorageKey();
+  const key = pendingStorageKey(threadId);
   if (!key) return;
   localStorage.setItem(key, JSON.stringify({ threadId, startedAt: Date.now() }));
 }
 
-function getPendingMessage() {
-  const key = pendingStorageKey();
+function getPendingMessage(threadId = state.threadId) {
+  const key = pendingStorageKey(threadId);
   if (!key) return null;
   try {
     const pending = JSON.parse(localStorage.getItem(key) || "null");
@@ -98,11 +99,41 @@ function getPendingMessage() {
   }
 }
 
-function clearPendingMessage(threadId = "") {
-  const key = pendingStorageKey();
+function clearPendingMessage(threadId = state.threadId) {
+  const key = pendingStorageKey(threadId);
   if (!key) return;
-  const pending = getPendingMessage();
-  if (!threadId || pending?.threadId === threadId) localStorage.removeItem(key);
+  localStorage.removeItem(key);
+}
+
+function clearAllPendingMessages() {
+  if (!state.user) return;
+  const prefix = `nba-chat-pending-${state.user.id}-`;
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index);
+    if (key?.startsWith(prefix)) localStorage.removeItem(key);
+  }
+}
+
+function getConversationRuntime(threadId = state.threadId) {
+  if (!state.conversationRuntime.has(threadId)) {
+    state.conversationRuntime.set(threadId, {
+      busy: false,
+      controller: null,
+      answer: "",
+      pendingArticle: null,
+    });
+  }
+  return state.conversationRuntime.get(threadId);
+}
+
+function hasBusyConversation() {
+  return Array.from(state.conversationRuntime.values()).some((runtime) => runtime.busy);
+}
+
+function updateComposerState() {
+  const runtime = getConversationRuntime();
+  sendButton.disabled = runtime.busy;
+  stopButton.hidden = !runtime.busy;
 }
 
 function isAuthenticated() {
@@ -256,6 +287,7 @@ function resetConversation() {
   localStorage.setItem(threadStorageKey(), state.threadId);
   chat.replaceChildren();
   intro.hidden = false;
+  updateComposerState();
   renderConversationList();
 }
 
@@ -277,7 +309,14 @@ async function restoreConversation() {
 
 function recoverPendingMessage(threadId) {
   if (!threadId) return;
-  const pending = getPendingMessage();
+  const runtime = getConversationRuntime(threadId);
+  if (runtime.busy) {
+    const article = addMessage("assistant", runtime.answer || "正在思考…", false);
+    article.classList.add("pending");
+    runtime.pendingArticle = article;
+    return;
+  }
+  const pending = getPendingMessage(threadId);
   const selectedConversation = state.conversations.find((conversation) => conversation.id === threadId);
   const recentlyUpdated = selectedConversation && Date.now() - selectedConversation.updatedAt < 15 * 60 * 1000;
   const lastMessageIsUser = state.messages.at(-1)?.role === "user";
@@ -288,6 +327,7 @@ function recoverPendingMessage(threadId) {
   }
   const article = addMessage("assistant", "正在思考…", false);
   article.classList.add("pending");
+  runtime.pendingArticle = article;
   pollPendingMessage(threadId, article);
 }
 
@@ -305,6 +345,7 @@ function pollPendingMessage(threadId, article) {
       const data = await response.json();
       if (data.messages?.some((message) => message.role === "assistant")) {
         clearPendingMessage(threadId);
+        getConversationRuntime(threadId).pendingArticle = null;
         await loadConversationMessages(threadId);
         await loadConversations();
         return;
@@ -328,13 +369,15 @@ async function loadConversationMessages(threadId) {
 }
 
 async function selectConversation(threadId) {
-  if (state.busy || threadId === state.threadId) return;
+  if (threadId === state.threadId) return;
   const selected = state.conversations.find((item) => item.id === threadId);
   if (!selected) return;
   state.threadId = selected.id;
   localStorage.setItem(threadStorageKey(), state.threadId);
   try {
     await loadConversationMessages(threadId);
+    recoverPendingMessage(threadId);
+    updateComposerState();
     renderConversationList();
     scrollToLatest();
   } catch (error) {
@@ -344,7 +387,7 @@ async function selectConversation(threadId) {
 
 function openClearConversationsModal() {
   if (!clearConversationsModal) return;
-  if (state.busy) {
+  if (hasBusyConversation()) {
     notify("正在生成回答，请等待完成后再删除对话");
     return;
   }
@@ -363,7 +406,7 @@ function closeClearConversationsModal() {
 }
 
 function openRenameConversationModal(threadId) {
-  if (!renameConversationModal || state.busy) return;
+  if (!renameConversationModal || getConversationRuntime(threadId).busy) return;
   const conversation = state.conversations.find((item) => item.id === threadId);
   if (!conversation) return;
   state.renamingThreadId = threadId;
@@ -403,7 +446,7 @@ async function clearAllConversations() {
     notify("清空对话失败，请稍后重试");
     return;
   }
-  clearPendingMessage();
+  clearAllPendingMessages();
   state.conversations = [];
   closeClearConversationsModal();
   resetConversation();
@@ -411,7 +454,7 @@ async function clearAllConversations() {
 
 function openDeleteConversationModal(threadId) {
   if (!deleteConversationModal) return;
-  if (state.busy) {
+  if (getConversationRuntime(threadId).busy) {
     notify("正在生成回答，请等待完成后再删除对话");
     return;
   }
@@ -636,27 +679,30 @@ async function checkHealth() {
 }
 
 async function submitMessage(message) {
-  if (state.busy || !message.trim()) return;
+  const threadId = state.threadId;
+  const runtime = getConversationRuntime(threadId);
+  if (runtime.busy || !message.trim()) return;
   const normalizedMessage = message.trim();
-  state.busy = true;
+  runtime.busy = true;
+  runtime.answer = "";
   input.value = "";
   input.style.height = "auto";
-  sendButton.disabled = true;
-  stopButton.hidden = false;
-  state.controller = new AbortController();
+  updateComposerState();
+  runtime.controller = new AbortController();
   addMessage("user", normalizedMessage);
-  markPendingMessage(state.threadId);
+  markPendingMessage(threadId);
 
   const pending = addMessage("assistant", "正在思考…", false);
   pending.classList.add("pending");
+  runtime.pendingArticle = pending;
   scrollToLatest();
 
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal: state.controller.signal,
-      body: JSON.stringify({ message: normalizedMessage, thread_id: state.threadId }),
+      signal: runtime.controller.signal,
+      body: JSON.stringify({ message: normalizedMessage, thread_id: threadId }),
     });
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
@@ -680,8 +726,11 @@ async function submitMessage(message) {
         const event = JSON.parse(line);
         if (event.type === "token") {
           answer += event.content || "";
-          pending.querySelector(".message-text").innerHTML = renderMarkdown(answer);
-          scrollToLatest();
+          runtime.answer = answer;
+          if (runtime.pendingArticle?.isConnected) {
+            runtime.pendingArticle.querySelector(".message-text").innerHTML = renderMarkdown(answer);
+            if (state.threadId === threadId) scrollToLatest();
+          }
         } else if (event.type === "metadata") {
           metadata = event;
         } else if (event.type === "error") {
@@ -694,34 +743,42 @@ async function submitMessage(message) {
       const event = JSON.parse(buffer);
       if (event.type === "metadata") metadata = event;
     }
-    pending.remove();
-    clearPendingMessage(state.threadId);
-    addMessage("assistant", metadata.answer || answer, true, metadata.web_search_used, metadata.game_data_used, metadata.player_data_used, metadata.nba_api_game_used);
+    if (runtime.pendingArticle?.isConnected) runtime.pendingArticle.remove();
+    runtime.pendingArticle = null;
+    clearPendingMessage(threadId);
+    if (state.threadId === threadId) {
+      addMessage("assistant", metadata.answer || answer, true, metadata.web_search_used, metadata.game_data_used, metadata.player_data_used, metadata.nba_api_game_used);
+    }
     await loadConversations();
-    scrollToLatest();
+    if (state.threadId === threadId) scrollToLatest();
   } catch (error) {
     if (error.name === "AbortError") {
-      const text = pending.querySelector(".message-text");
-      if (!answer) text.textContent = "已停止生成";
-      pending.classList.remove("pending");
-      pending.classList.add("stopped");
+      if (runtime.pendingArticle?.isConnected) {
+        const text = runtime.pendingArticle.querySelector(".message-text");
+        if (!answer) text.textContent = "已停止生成";
+        runtime.pendingArticle.classList.remove("pending");
+        runtime.pendingArticle.classList.add("stopped");
+      }
       return;
     }
-    clearPendingMessage(state.threadId);
-    pending.querySelector(".message-text").textContent = error.message;
-    pending.classList.remove("pending");
-    pending.classList.add("error");
+    clearPendingMessage(threadId);
+    if (runtime.pendingArticle?.isConnected) {
+      runtime.pendingArticle.querySelector(".message-text").textContent = error.message;
+      runtime.pendingArticle.classList.remove("pending");
+      runtime.pendingArticle.classList.add("error");
+    }
   } finally {
-    state.busy = false;
-    state.controller = null;
-    sendButton.disabled = false;
-    stopButton.hidden = true;
-    input.focus();
+    runtime.busy = false;
+    runtime.controller = null;
+    if (state.threadId === threadId) {
+      updateComposerState();
+      input.focus();
+    }
   }
 }
 
 stopButton.addEventListener("click", () => {
-  if (state.controller) state.controller.abort();
+  getConversationRuntime().controller?.abort();
 });
 
 logoutButton.addEventListener("click", async () => {
@@ -798,7 +855,6 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
 });
 
 function startNewConversation() {
-  if (state.busy) return;
   resetConversation();
   input.focus();
 }
