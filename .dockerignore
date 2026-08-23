@@ -5,5 +5,4 @@ __pycache__
 *.py[cod]
 .pytest_cache
 .env
-data/*.sqlite3
 tests

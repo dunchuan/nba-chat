@@ -7,15 +7,12 @@ Safety, caching, and endpoint validation remain in the registered tools.
 
 import json
 import os
-import sqlite3
 from typing import Any
-from pathlib import Path
 
-import aiosqlite
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from app.renderers import render_boxscore_template
@@ -25,9 +22,12 @@ from app.evidence import evaluate_tool_evidence
 
 load_dotenv()
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-CHECKPOINT_DB_PATH = Path(
-    os.getenv("LANGGRAPH_CHECKPOINT_SQLITE_PATH", str(BASE_DIR / "data" / "langgraph_checkpoints.sqlite3"))
+DATABASE_URL = os.getenv("DATABASE_URL") or (
+    "postgresql://{user}:{password}@{host}:{port}/{database}".format(
+        user=os.environ["POSTGRES_USER"], password=os.environ["POSTGRES_PASSWORD"],
+        host=os.getenv("POSTGRES_HOST", "nba-chat-db"), port=os.getenv("POSTGRES_PORT", "5432"),
+        database=os.environ["POSTGRES_DB"],
+    )
 )
 
 
@@ -143,14 +143,13 @@ def _compatibility_fields(state: NativeState) -> dict[str, object]:
     }
 
 
-async def create_async_sqlite_checkpointer() -> AsyncSqliteSaver:
-    """Create the durable checkpointer used by all web conversations."""
-    CHECKPOINT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    connection = await aiosqlite.connect(CHECKPOINT_DB_PATH)
-    await connection.execute("PRAGMA busy_timeout = 5000")
-    checkpointer = AsyncSqliteSaver(connection)
-    await checkpointer.setup()
-    return checkpointer
+async def create_async_postgres_checkpointer(setup: bool = False):
+    """Open the durable PostgreSQL checkpointer and return it with its owner."""
+    owner = AsyncPostgresSaver.from_conn_string(DATABASE_URL)
+    checkpointer = await owner.__aenter__()
+    if setup:
+        await checkpointer.setup()
+    return owner, checkpointer
 
 
 def agent_thread_id(user_id: int | str, conversation_thread_id: str) -> str:
@@ -160,30 +159,25 @@ def agent_thread_id(user_id: int | str, conversation_thread_id: str) -> str:
 
 def delete_agent_thread_state(user_id: int | str, conversation_thread_id: str) -> None:
     """Delete durable LangGraph state for one user-owned conversation."""
-    if not CHECKPOINT_DB_PATH.exists():
-        return
     thread_id = agent_thread_id(user_id, conversation_thread_id)
-    with sqlite3.connect(CHECKPOINT_DB_PATH) as connection:
-        connection.execute("PRAGMA busy_timeout = 5000")
-        # These tables are the public SQLite checkpointer schema created by
-        # SqliteSaver.setup(). Delete writes first for compatibility with
-        # SQLite foreign-key configurations.
-        connection.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
-        connection.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
+    import psycopg
+    with psycopg.connect(DATABASE_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM writes WHERE thread_id = %s", (thread_id,))
+            cursor.execute("DELETE FROM checkpoints WHERE thread_id = %s", (thread_id,))
 
 
 def delete_all_agent_thread_state(user_id: int | str) -> None:
     """Delete durable LangGraph state for every conversation owned by a user."""
-    if not CHECKPOINT_DB_PATH.exists():
-        return
     prefix = f"user-{user_id}:%"
-    with sqlite3.connect(CHECKPOINT_DB_PATH) as connection:
-        connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("DELETE FROM writes WHERE thread_id LIKE ?", (prefix,))
-        connection.execute("DELETE FROM checkpoints WHERE thread_id LIKE ?", (prefix,))
+    import psycopg
+    with psycopg.connect(DATABASE_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM writes WHERE thread_id LIKE %s", (prefix,))
+            cursor.execute("DELETE FROM checkpoints WHERE thread_id LIKE %s", (prefix,))
 
 
-def build_native_tool_graph(tools, checkpointer: AsyncSqliteSaver):
+def build_native_tool_graph(tools, checkpointer: AsyncPostgresSaver):
     max_steps = max(2, int(os.getenv("REACT_MAX_STEPS", "12")))
     model = ChatOpenAI(
         model=os.getenv("MODEL_NAME", "qwen3.6-flash"),
@@ -290,6 +284,6 @@ def build_native_tool_graph(tools, checkpointer: AsyncSqliteSaver):
     return workflow.compile(checkpointer=checkpointer)
 
 
-# FastAPI creates the graph in its lifespan, so AsyncSqliteSaver is bound to
+# FastAPI creates the graph in its lifespan, so AsyncPostgresSaver is bound to
 # the same event loop that later runs ``astream_events``.
 graph = None

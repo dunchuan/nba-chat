@@ -6,10 +6,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Use a current installer and the canonical package index. Some configured
+# mirrors can serve an artifact whose content does not match its advertised
+# sha256, which makes pip abort with "Expected sha256 ... Got ...".
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir --index-url https://pypi.org/simple -r requirements.txt
 
 COPY . ./
-RUN mkdir -p /app/data
 
 EXPOSE 8000
 

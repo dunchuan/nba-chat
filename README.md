@@ -43,16 +43,9 @@ python -m uvicorn app.main:app --reload --port 8000
 
 ## 账号与登录
 
-页面支持用户自行注册。系统仍保留以下 Demo 账号，便于快速体验：
+页面支持用户自行注册。数据库表和初始结构需要在启动应用前通过 `scripts/init_db.py` 准备。
 
-| 用户名 | 密码 |
-| --- | --- |
-| `nbachat` | `nbachat` |
-| `tester_hlx` | `tester_hlx` |
-| `tester_wk` | `tester_wk` |
-| `tester_lyk` | `tester_lyk` |
-
-密码使用 PBKDF2-SHA256 加盐哈希保存在 SQLite 中，浏览器只保存 `HttpOnly` 会话 Cookie，不保存密码。
+密码使用 PBKDF2-SHA256 加盐哈希保存在 PostgreSQL 中，浏览器只保存 `HttpOnly` 会话 Cookie，不保存密码。
 
 本地单元测试直接调用 Agent 内部逻辑，不需要登录。浏览器测试、API 测试和 live 测试需要先登录。
 
@@ -88,13 +81,13 @@ Live 测试会消耗模型和第三方 API 配额，并可能受网络、代理�
 | `LANGSMITH_PROJECT` | LangSmith 项目名称 |
 | `REACT_MAX_STEPS` | 单次 ReAct 最大工具步骤数 |
 | `LANGGRAPH_RECURSION_LIMIT` | LangGraph 递归安全上限 |
-| `SQLITE_PATH` | 用户和登录会话的 SQLite 数据库路径 |
+| `DATABASE_URL` | PostgreSQL 数据库连接字符串 |
 | `AUTH_REQUIRED` | 是否要求登录，默认 `true` |
 | `REGISTRATION_ENABLED` | 是否允许注册，默认 `true` |
 | `SESSION_MAX_AGE` | 登录会话有效期（秒），默认 7 天 |
 | `SESSION_COOKIE_SECURE` | Cookie 是否仅通过 HTTPS 发送；`auto` 会根据请求协议判断 |
 
-不要把 `.env`、真实 API Key 或本地 SQLite 数据库提交到 Git。
+不要把 `.env`、真实 API Key 或数据库备份文件提交到 Git。
 
 ## Render 部署
 
@@ -115,7 +108,7 @@ uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
 
 健康检查地址为 `/api/health`。
 
-Render Free 实例可能休眠或重启。当前缓存和 LangGraph 会话状态保存在进程内，重启后会清空；SQLite 适合当前单实例 Demo，扩展为多实例服务时应迁移到 PostgreSQL 等共享数据库。
+Render Free 实例可能休眠或重启。使用 PostgreSQL 后，用户、对话和 LangGraph 会话状态可以跨进程和重启持久化；仍应为 PostgreSQL 配置备份和连接信息。
 
 ## 许可证与声明
 

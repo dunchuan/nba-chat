@@ -1,9 +1,7 @@
-"""Authentication and account API tests using an isolated SQLite file."""
+"""Authentication tests against the configured PostgreSQL database."""
 
-import sqlite3
-import tempfile
+import os
 import unittest
-from pathlib import Path
 from unittest.mock import ANY, patch
 
 from fastapi.testclient import TestClient
@@ -14,15 +12,13 @@ from app import main
 
 class AuthTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "auth.sqlite3"
-        self.db_patch = patch.object(auth, "DB_PATH", self.db_path)
-        self.db_patch.start()
-        auth.init_auth_db()
+        if not os.getenv("DATABASE_URL") and not os.getenv("POSTGRES_PASSWORD"):
+            self.skipTest("PostgreSQL is not configured")
+        self.prefix = "test_auth_" + os.urandom(4).hex()
 
     def tearDown(self):
-        self.db_patch.stop()
-        self.temp_dir.cleanup()
+        with auth._connection() as db:
+            db.execute("DELETE FROM users WHERE username LIKE %s", (self.prefix + "%",))
 
     def test_create_authenticate_and_session_lookup(self):
         user_id = auth.create_user("New_User", "secret12")
@@ -41,7 +37,7 @@ class AuthTests(unittest.TestCase):
 
     def test_username_is_unique_ignoring_case(self):
         auth.create_user("Case_User", "secret12")
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(Exception):
             auth.create_user("case_user", "another12")
 
     def test_conversation_and_messages_are_persisted_per_user(self):

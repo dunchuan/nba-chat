@@ -5,11 +5,12 @@ import json
 import logging
 import os
 import socket
-import sqlite3
 import time
 import uuid
 
 import httpx
+import psycopg
+from psycopg.errors import UniqueViolation
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +20,7 @@ from pydantic import BaseModel, Field
 from app.native_agent import (
     agent_thread_id,
     build_native_tool_graph,
-    create_async_sqlite_checkpointer,
+    create_async_postgres_checkpointer,
     delete_agent_thread_state,
     delete_all_agent_thread_state,
 )
@@ -34,7 +35,7 @@ from app.auth import (
     delete_conversation,
     get_conversation_messages,
     delete_session,
-    init_auth_db,
+    DATABASE_URL,
     list_conversations,
     normalize_username,
     rename_conversation,
@@ -46,24 +47,91 @@ from app.auth import (
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
 graph = None
+_monitor_task = None
+_startup_error = None
+_database_ready = False
+_checkpointer_owner = None
+_backend_was_ready = False
+
+
+def _check_database_connection() -> None:
+    with psycopg.connect(DATABASE_URL) as connection:
+        connection.execute("SELECT 1")
+
+
+async def _close_backend(application: FastAPI) -> None:
+    """Detach the current Agent and close its PostgreSQL owner."""
+    global graph, _database_ready, _checkpointer_owner
+    graph = None
+    _database_ready = False
+    application.state.checkpointer = None
+    owner, _checkpointer_owner = _checkpointer_owner, None
+    if owner is not None:
+        await owner.__aexit__(None, None, None)
+
+
+async def _connect_backend(application: FastAPI) -> None:
+    """Connect to PostgreSQL and build a fresh Agent graph."""
+    global graph, _startup_error, _database_ready, _checkpointer_owner, _backend_was_ready
+    await asyncio.to_thread(_check_database_connection)
+
+    owner = None
+    checkpointer = None
+    try:
+        if os.getenv("DASHSCOPE_API_KEY"):
+            owner, checkpointer = await create_async_postgres_checkpointer()
+            next_graph = build_native_tool_graph(get_tool_registry(), checkpointer)
+        else:
+            next_graph = None
+    except Exception:
+        if owner is not None:
+            await owner.__aexit__(None, None, None)
+        raise
+
+    _checkpointer_owner = owner
+    application.state.checkpointer = checkpointer
+    graph = next_graph
+    _database_ready = True
+    _startup_error = None
+    _backend_was_ready = True
+    logger.info("Database backend is ready")
+
+
+async def _monitor_backend(application: FastAPI) -> None:
+    """Keep the database and Agent backend recoverable without app restarts."""
+    global _startup_error
+    retry_delay = 5
+    while True:
+        try:
+            if _database_ready:
+                await asyncio.to_thread(_check_database_connection)
+            else:
+                await _connect_backend(application)
+                retry_delay = 5
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _startup_error = f"{type(exc).__name__}: {exc}"
+            logger.warning("Database backend unavailable: %s", exc)
+            await _close_backend(application)
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 30)
+        else:
+            await asyncio.sleep(10)
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    """Create the async checkpointer in FastAPI's serving event loop."""
-    global graph
-    init_auth_db()
-    checkpointer = None
-    if os.getenv("DASHSCOPE_API_KEY"):
-        checkpointer = await create_async_sqlite_checkpointer()
-        graph = build_native_tool_graph(get_tool_registry(), checkpointer)
-    application.state.checkpointer = checkpointer
+    """Run backend monitoring without blocking the first HTML response."""
+    global _monitor_task, graph, _checkpointer_owner
+    _monitor_task = asyncio.create_task(_monitor_backend(application))
     try:
         yield
     finally:
-        graph = None
-        if checkpointer is not None:
-            await checkpointer.conn.close()
+        if _monitor_task is not None and not _monitor_task.done():
+            _monitor_task.cancel()
+            await asyncio.gather(_monitor_task, return_exceptions=True)
+        await _close_backend(application)
 
 
 app = FastAPI(title="NBA Chat", version="1.0.0", lifespan=lifespan)
@@ -93,6 +161,13 @@ def _try_acquire_chat_slot(user_id: object, thread_id: str) -> bool:
 
 def _release_chat_slot(user_id: object, thread_id: str) -> None:
     _active_chat_threads.discard(_chat_lock_key(user_id, thread_id))
+
+
+def _ensure_backend_ready() -> None:
+    if _startup_error:
+        raise HTTPException(status_code=503, detail="服务初始化失败，请查看服务器日志")
+    if not _database_ready:
+        raise HTTPException(status_code=503, detail="服务正在启动，请稍候")
 
 
 @app.middleware("http")
@@ -250,9 +325,17 @@ def _run_nba_connectivity_diagnostic(game_id: str) -> dict[str, object]:
 
 @app.get("/api/health")
 async def health():
+    if _startup_error:
+        status = "degraded" if _backend_was_ready else "error"
+    elif not _database_ready:
+        status = "starting"
+    else:
+        status = "ok"
     return {
-        "status": "ok",
+        "status": status,
+        "database_ready": _database_ready,
         "agent_ready": graph is not None,
+        "startup_error": _startup_error,
         "langsmith_tracing": os.getenv("LANGSMITH_TRACING", "false").lower() == "true",
         "langsmith_project": os.getenv("LANGSMITH_PROJECT", "default"),
         "auth_required": AUTH_REQUIRED,
@@ -263,12 +346,13 @@ async def health():
 
 @app.post("/api/auth/register")
 async def register(credentials: Credentials, request: Request, response: Response):
+    _ensure_backend_ready()
     if not REGISTRATION_ENABLED:
         raise HTTPException(status_code=403, detail="当前环境暂未开放注册")
     username = normalize_username(credentials.username)
     try:
         user_id = await asyncio.to_thread(create_user, username, credentials.password)
-    except sqlite3.IntegrityError as exc:
+    except UniqueViolation as exc:
         raise HTTPException(status_code=409, detail="该用户名已被使用") from exc
     token = await asyncio.to_thread(create_session, user_id, SESSION_MAX_AGE)
     _set_session_cookie(response, request, token)
@@ -278,6 +362,7 @@ async def register(credentials: Credentials, request: Request, response: Respons
 
 @app.post("/api/auth/login")
 async def login(credentials: Credentials, request: Request, response: Response):
+    _ensure_backend_ready()
     user_id = await asyncio.to_thread(authenticate, credentials.username, credentials.password)
     if not user_id:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
@@ -290,6 +375,7 @@ async def login(credentials: Credentials, request: Request, response: Response):
 
 @app.get("/api/auth/me")
 async def me(nba_session: str | None = Cookie(default=None)):
+    _ensure_backend_ready()
     return require_user(nba_session)
 
 
@@ -490,5 +576,14 @@ async def chat(
 async def frontend(path: str):
     candidate = (WEB_DIR / path).resolve()
     if path and candidate.is_relative_to(WEB_DIR) and candidate.is_file():
-        return FileResponse(candidate)
-    return FileResponse(WEB_DIR / "index.html")
+        response = FileResponse(candidate)
+    else:
+        response = FileResponse(WEB_DIR / "index.html")
+
+    # Frontend files are edited frequently during development. Do not let the
+    # browser keep serving an older HTML shell after a refresh.
+    if candidate.suffix.lower() in {".html", ""} or not path:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
