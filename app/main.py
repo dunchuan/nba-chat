@@ -544,6 +544,11 @@ async def cancel_chat_generation(thread_id: str, nba_session: str | None = Cooki
         return {"ok": True, "status": "not_running"}
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
+    # The cancelled run may have written intermediate LangGraph checkpoints
+    # before it was stopped. Remove those checkpoints so the next question in
+    # this conversation starts from a clean Agent state. This only removes
+    # Agent state; the user-visible conversation messages remain intact.
+    await asyncio.to_thread(delete_agent_thread_state, int(user["id"]), thread_id)
     return {"ok": True, "status": "cancelled"}
 
 
