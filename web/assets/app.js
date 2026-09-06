@@ -1,7 +1,6 @@
 const form = document.querySelector("#chat-form");
 const input = document.querySelector("#message");
 const sendButton = document.querySelector("#send");
-const stopButton = document.querySelector("#stop");
 const chat = document.querySelector("#chat");
 const workspace = document.querySelector(".workspace");
 const intro = document.querySelector("#intro");
@@ -133,10 +132,16 @@ function hasBusyConversation() {
 
 function updateComposerState() {
   const runtime = getConversationRuntime();
-  sendButton.disabled = runtime.busy;
-  stopButton.hidden = !runtime.busy;
-  stopButton.disabled = runtime.stopping;
-  stopButton.textContent = runtime.stopping ? "停止中…" : "停止";
+  const stopping = runtime.busy && runtime.stopping;
+  sendButton.disabled = stopping;
+  // The textarea is intentionally empty while a response is generating.
+  // Keep the action button out of native form validation so Stop remains
+  // clickable even though the textarea is required for a new message.
+  sendButton.type = runtime.busy ? "button" : "submit";
+  sendButton.classList.toggle("is-stopping", runtime.busy);
+  sendButton.textContent = stopping ? "停止中…" : runtime.busy ? "停止" : "发送";
+  sendButton.setAttribute("aria-label", runtime.busy ? "停止生成" : "发送消息");
+  sendButton.setAttribute("title", runtime.busy ? "停止生成" : "发送消息");
 }
 
 function isAuthenticated() {
@@ -625,17 +630,19 @@ function addMessage(role, content, save = true, webSearchUsed = false, gameDataU
 function markGenerationStopped(article, threadId, answer = "") {
   if (!article?.isConnected) return;
   const text = article.querySelector(".message-text");
-  if (text && !answer) text.textContent = "已停止生成";
+  if (!text) return;
+  if (!answer) text.textContent = "";
   article.classList.remove("pending", "error");
   article.classList.add("stopped");
   clearPendingMessage(threadId);
-  if (answer && !article.querySelector(".generation-status")) {
-    const status = document.createElement("div");
-    status.className = "generation-status";
-    status.textContent = "已停止生成";
-    article.append(status);
-  }
-  if (article.querySelector(".regenerate-message")) return;
+  if (text.querySelector(".generation-actions")) return;
+
+  const actions = document.createElement("div");
+  actions.className = "generation-actions";
+  const status = document.createElement("span");
+  status.className = "generation-status";
+  status.textContent = "已停止生成";
+  actions.append(status);
 
   const regenerateButton = document.createElement("button");
   regenerateButton.type = "button";
@@ -649,7 +656,8 @@ function markGenerationStopped(article, threadId, answer = "") {
     article.remove();
     submitMessage(originalMessage, { regenerate: true });
   });
-  article.append(regenerateButton);
+  actions.append(regenerateButton);
+  text.append(actions);
 }
 
 function setAuthMode(mode) {
@@ -818,7 +826,7 @@ async function submitMessage(message, options = {}) {
   }
 }
 
-stopButton.addEventListener("click", async () => {
+async function stopCurrentGeneration() {
   const threadId = state.threadId;
   const runtime = getConversationRuntime(threadId);
   if (!runtime.busy || runtime.stopping) return;
@@ -833,6 +841,10 @@ stopButton.addEventListener("click", async () => {
     updateComposerState();
     notify(error.message || "停止生成失败");
   }
+}
+
+sendButton.addEventListener("click", () => {
+  if (getConversationRuntime().busy) stopCurrentGeneration();
 });
 
 logoutButton.addEventListener("click", async () => {
@@ -889,6 +901,10 @@ authForm.addEventListener("submit", async (event) => {
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (getConversationRuntime().busy) {
+    stopCurrentGeneration();
+    return;
+  }
   submitMessage(input.value);
 });
 
