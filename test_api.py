@@ -28,7 +28,7 @@ def main() -> int:
         "MODEL_BASE_URL",
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
     ).strip()
-    model_name = os.getenv("MODEL_NAME", "qwen3.7-plus").strip()
+    model_name = os.getenv("MODEL_NAME", "qwen3.7-flash").strip()
 
     print(f"环境文件：{ENV_FILE}")
     print(f"Base URL：{base_url}")

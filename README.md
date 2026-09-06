@@ -29,9 +29,12 @@ Copy-Item .env.example .env
 
 ```env
 DASHSCOPE_API_KEY=your_dashscope_api_key
-MODEL_NAME=qwen3.7-plus
+MODEL_NAME=qwen3.7-flash
 MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
+
+若要消耗百炼新人免费额度，请使用密钥管理页面创建的普通 API Key；
+`sk-sp-` 开头的 Token Plan/Coding Plan 专属 Key 不会消耗新人免费额度。
 
 启动服务：
 
@@ -73,7 +76,7 @@ Live 测试会消耗模型和第三方 API 配额，并可能受网络、代理�
 | 变量 | 用途 |
 | --- | --- |
 | `DASHSCOPE_API_KEY` | Qwen 模型 API Key |
-| `MODEL_NAME` | 主分析模型，默认 `qwen3.7-plus` |
+| `MODEL_NAME` | 主分析模型，默认 `qwen3.7-flash` |
 | `MODEL_BASE_URL` | OpenAI 兼容模型服务地址 |
 | `NATIVE_MAX_COMPLETION_TOKENS` | ReAct Agent 单次模型输出上限 |
 | `TAVILY_API_KEY` | 当前资讯联网搜索，可选 |

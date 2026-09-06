@@ -182,7 +182,7 @@ def delete_all_agent_thread_state(user_id: int | str) -> None:
 def build_native_tool_graph(tools, checkpointer: AsyncPostgresSaver):
     max_steps = max(2, int(os.getenv("REACT_MAX_STEPS", "12")))
     model = ChatOpenAI(
-        model=os.getenv("MODEL_NAME", "qwen3.6-flash"),
+        model=os.getenv("MODEL_NAME", "qwen3.7-flash"),
         api_key=os.getenv("DASHSCOPE_API_KEY"),
         base_url=os.getenv(
             "MODEL_BASE_URL",
