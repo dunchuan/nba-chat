@@ -6,7 +6,7 @@
     <meta name="description" content="NBA Chat：面向中文球迷的 NBA 智能问答助手" />
     <title>NBA Chat · NBA 智能问答助手</title>
     <link rel="icon" type="image/x-icon" href="/assets/nba-favicon.ico" />
-    <link rel="stylesheet" href="/assets/styles.css?v=61" />
+    <link rel="stylesheet" href="/assets/styles.css?v=62" />
   </head>
   <body>
     <div class="shell">
@@ -16,9 +16,15 @@
         </a>
         <button class="mobile-sidebar-toggle" id="mobile-sidebar-toggle" type="button" aria-label="打开会话历史" title="打开会话历史">›</button>
         <div class="status"><span class="status-dot" id="status-dot"></span><span id="status-text">连接中</span></div>
-        <div class="account-actions" id="account-actions" hidden>
-          <span class="account-username" id="account-username"></span>
-          <button class="logout-button" id="logout-button" type="button">退出登录</button>
+        <div class="topbar-actions">
+          <button class="theme-toggle" id="theme-toggle" type="button" aria-label="开启深夜模式" aria-pressed="false" title="开启深夜模式">
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+            <span class="theme-toggle-label">深夜模式</span>
+          </button>
+          <div class="account-actions" id="account-actions" hidden>
+            <span class="account-username" id="account-username"></span>
+            <button class="logout-button" id="logout-button" type="button">退出登录</button>
+          </div>
         </div>
       </header>
 
@@ -130,6 +136,6 @@
       <div class="app-notice" id="app-notice" role="status" aria-live="polite" hidden></div>
 
     </div>
-    <script src="/assets/app.js?v=60" defer></script>
+    <script src="/assets/app.js?v=63" defer></script>
   </body>
 </html>

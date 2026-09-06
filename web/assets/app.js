@@ -37,10 +37,28 @@ const sidebarToggle = document.querySelector("#sidebar-toggle");
 const mobileSidebarToggle = document.querySelector("#mobile-sidebar-toggle");
 const sidebarScrim = document.querySelector("#sidebar-scrim");
 const appNotice = document.querySelector("#app-notice");
+const themeToggle = document.querySelector("#theme-toggle");
 let touchStartX = 0;
 let touchStartY = 0;
 let trackingSidebarSwipe = false;
 let noticeTimer = null;
+let userControlsScroll = false;
+
+function setNightMode(enabled, persist = true) {
+  document.documentElement.classList.toggle("night-mode", enabled);
+  if (themeToggle) {
+    themeToggle.setAttribute("aria-pressed", String(enabled));
+    themeToggle.setAttribute("aria-label", enabled ? "关闭深夜模式" : "开启深夜模式");
+    themeToggle.title = enabled ? "关闭深夜模式" : "开启深夜模式";
+    themeToggle.querySelector(".theme-toggle-icon").textContent = enabled ? "☀" : "☾";
+    themeToggle.querySelector(".theme-toggle-label").textContent = enabled ? "日间模式" : "深夜模式";
+  }
+  if (persist) localStorage.setItem("nba-chat-night-mode", String(enabled));
+}
+
+themeToggle?.addEventListener("click", () => {
+  setNightMode(!document.documentElement.classList.contains("night-mode"));
+});
 
 const state = {
   threadId: "",
@@ -491,8 +509,9 @@ async function deleteSelectedConversation() {
   await loadConversations();
 }
 
-function scrollToLatest(behavior = "smooth") {
+function scrollToLatest(behavior = "smooth", force = false) {
   const scroll = () => {
+    if (!force && userControlsScroll) return;
     workspace.scrollTo({
       top: workspace.scrollHeight,
       behavior,
@@ -503,6 +522,14 @@ function scrollToLatest(behavior = "smooth") {
   setTimeout(scroll, 50);
   setTimeout(scroll, 250);
 }
+
+function letUserControlScroll() {
+  userControlsScroll = true;
+}
+
+workspace?.addEventListener("wheel", letUserControlScroll, { passive: true });
+workspace?.addEventListener("touchstart", letUserControlScroll, { passive: true });
+workspace?.addEventListener("pointerdown", letUserControlScroll, { passive: true });
 
 function escapeHtml(value) {
   return String(value)
@@ -728,6 +755,7 @@ async function submitMessage(message, options = {}) {
   runtime.busy = true;
   runtime.stopping = false;
   runtime.answer = "";
+  userControlsScroll = false;
   input.value = "";
   input.style.height = "auto";
   updateComposerState();
@@ -999,6 +1027,7 @@ document.addEventListener("keydown", (event) => {
   if (!clearConversationsModal?.hidden) closeClearConversationsModal();
 });
 
+setNightMode(localStorage.getItem("nba-chat-night-mode") === "true", false);
 setSidebarCollapsed(localStorage.getItem("nba-chat-sidebar-collapsed") === "true", false);
 setMobileSidebarOpen(false);
 applyAuthState("loading");
