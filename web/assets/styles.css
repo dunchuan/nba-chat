@@ -167,6 +167,9 @@ textarea::placeholder { color: #94a3b8; }
 .stop { order: 2; flex: 0 0 58px; width: 58px; height: 44px; border: 1px solid rgba(200,16,46,.35); border-radius: 14px; background: var(--danger-soft); color: var(--danger); font-size: 12px; transition: .2s ease; }
 .stop:hover { background: var(--danger); color: white; }
 .stop[hidden] { display: none; }
+.generation-status { margin-top: 8px; color: var(--muted); font-size: 12px; }
+.regenerate-message { margin-top: 10px; padding: 6px 10px; border: 1px solid rgba(29,66,138,.25); border-radius: 8px; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; }
+.regenerate-message:hover { background: var(--accent-soft); }
 .footer-row { width: min(1120px, 94%); margin: 9px auto 0; display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
 .legal-note { width: min(1120px, 94%); margin: 5px auto 0; color: var(--muted); font-size: 10px; line-height: 1.45; opacity: .82; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }

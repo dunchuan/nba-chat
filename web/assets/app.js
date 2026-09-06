@@ -118,6 +118,7 @@ function getConversationRuntime(threadId = state.threadId) {
   if (!state.conversationRuntime.has(threadId)) {
     state.conversationRuntime.set(threadId, {
       busy: false,
+      stopping: false,
       controller: null,
       answer: "",
       pendingArticle: null,
@@ -134,6 +135,8 @@ function updateComposerState() {
   const runtime = getConversationRuntime();
   sendButton.disabled = runtime.busy;
   stopButton.hidden = !runtime.busy;
+  stopButton.disabled = runtime.stopping;
+  stopButton.textContent = runtime.stopping ? "停止中…" : "停止";
 }
 
 function isAuthenticated() {
@@ -619,6 +622,36 @@ function addMessage(role, content, save = true, webSearchUsed = false, gameDataU
   return article;
 }
 
+function markGenerationStopped(article, threadId, answer = "") {
+  if (!article?.isConnected) return;
+  const text = article.querySelector(".message-text");
+  if (text && !answer) text.textContent = "已停止生成";
+  article.classList.remove("pending", "error");
+  article.classList.add("stopped");
+  clearPendingMessage(threadId);
+  if (answer && !article.querySelector(".generation-status")) {
+    const status = document.createElement("div");
+    status.className = "generation-status";
+    status.textContent = "已停止生成";
+    article.append(status);
+  }
+  if (article.querySelector(".regenerate-message")) return;
+
+  const regenerateButton = document.createElement("button");
+  regenerateButton.type = "button";
+  regenerateButton.className = "regenerate-message";
+  regenerateButton.textContent = "重新生成";
+  regenerateButton.addEventListener("click", () => {
+    const originalMessage = [...state.messages]
+      .reverse()
+      .find((message) => message.role === "user" && message.content)?.content;
+    if (!originalMessage) return;
+    article.remove();
+    submitMessage(originalMessage, { regenerate: true });
+  });
+  article.append(regenerateButton);
+}
+
 function setAuthMode(mode) {
   state.authMode = mode === "register" && state.registrationEnabled ? "register" : "login";
   const registering = state.authMode === "register";
@@ -678,18 +711,20 @@ async function checkHealth() {
   }
 }
 
-async function submitMessage(message) {
+async function submitMessage(message, options = {}) {
   const threadId = state.threadId;
   const runtime = getConversationRuntime(threadId);
+  const regenerate = options.regenerate === true;
   if (runtime.busy || !message.trim()) return;
   const normalizedMessage = message.trim();
   runtime.busy = true;
+  runtime.stopping = false;
   runtime.answer = "";
   input.value = "";
   input.style.height = "auto";
   updateComposerState();
   runtime.controller = new AbortController();
-  addMessage("user", normalizedMessage);
+  if (!regenerate) addMessage("user", normalizedMessage);
   markPendingMessage(threadId);
 
   const pending = addMessage("assistant", "正在思考…", false);
@@ -702,12 +737,15 @@ async function submitMessage(message) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: runtime.controller.signal,
-      body: JSON.stringify({ message: normalizedMessage, thread_id: threadId }),
+    body: JSON.stringify({ message: normalizedMessage, thread_id: threadId, regenerate }),
     });
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       if (response.status === 409 && errorData.detail === "conversation_busy") {
         throw new Error("该对话正在生成回答，请等待当前回答完成。");
+      }
+      if (response.status === 409 && errorData.detail === "regenerate_unavailable") {
+        throw new Error("当前消息没有可重新生成的回答。");
       }
       throw new Error(errorData.detail || "请求失败");
     }
@@ -716,6 +754,7 @@ async function submitMessage(message) {
     let buffer = "";
     let answer = "";
     let metadata = {};
+    let cancelled = false;
     while (true) {
       const { value, done } = await reader.read();
       buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
@@ -735,6 +774,8 @@ async function submitMessage(message) {
           metadata = event;
         } else if (event.type === "error") {
           throw new Error(event.message || "请求失败");
+        } else if (event.type === "cancelled") {
+          cancelled = true;
         }
       }
       if (done) break;
@@ -742,6 +783,10 @@ async function submitMessage(message) {
     if (buffer.trim()) {
       const event = JSON.parse(buffer);
       if (event.type === "metadata") metadata = event;
+    }
+    if (cancelled) {
+      markGenerationStopped(runtime.pendingArticle, threadId, answer);
+      return;
     }
     if (runtime.pendingArticle?.isConnected) runtime.pendingArticle.remove();
     runtime.pendingArticle = null;
@@ -753,12 +798,7 @@ async function submitMessage(message) {
     if (state.threadId === threadId) scrollToLatest();
   } catch (error) {
     if (error.name === "AbortError") {
-      if (runtime.pendingArticle?.isConnected) {
-        const text = runtime.pendingArticle.querySelector(".message-text");
-        if (!answer) text.textContent = "已停止生成";
-        runtime.pendingArticle.classList.remove("pending");
-        runtime.pendingArticle.classList.add("stopped");
-      }
+      if (runtime.stopping) markGenerationStopped(runtime.pendingArticle, threadId, answer);
       return;
     }
     clearPendingMessage(threadId);
@@ -769,6 +809,7 @@ async function submitMessage(message) {
     }
   } finally {
     runtime.busy = false;
+    runtime.stopping = false;
     runtime.controller = null;
     if (state.threadId === threadId) {
       updateComposerState();
@@ -777,8 +818,21 @@ async function submitMessage(message) {
   }
 }
 
-stopButton.addEventListener("click", () => {
-  getConversationRuntime().controller?.abort();
+stopButton.addEventListener("click", async () => {
+  const threadId = state.threadId;
+  const runtime = getConversationRuntime(threadId);
+  if (!runtime.busy || runtime.stopping) return;
+  runtime.stopping = true;
+  updateComposerState();
+  try {
+    const response = await fetch(`/api/conversations/${encodeURIComponent(threadId)}/cancel`, { method: "POST" });
+    if (!response.ok) throw new Error("停止生成失败");
+    runtime.controller?.abort();
+  } catch (error) {
+    runtime.stopping = false;
+    updateComposerState();
+    notify(error.message || "停止生成失败");
+  }
 });
 
 logoutButton.addEventListener("click", async () => {

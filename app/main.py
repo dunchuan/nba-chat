@@ -149,6 +149,7 @@ REGISTRATION_ENABLED = os.getenv("REGISTRATION_ENABLED", "true").strip().lower()
 SESSION_MAX_AGE = max(3600, int(os.getenv("SESSION_MAX_AGE", str(7 * 24 * 3600))))
 _active_chat_threads: set[tuple[str, str]] = set()
 _background_chat_tasks: set[asyncio.Task] = set()
+_active_chat_tasks: dict[tuple[str, str], asyncio.Task] = {}
 
 
 def _chat_lock_key(user_id: object, thread_id: str) -> tuple[str, str]:
@@ -241,6 +242,13 @@ async def _run_chat_generation(
             web_search_used=bool(final_result.get("web_search_used")),
         )
         await queue.put(_stream_event("done"))
+    except asyncio.CancelledError:
+        # A user-initiated stop is different from a failed generation. Tell
+        # the current browser not to promote the partial answer to a final
+        # assistant message, then let the cancellation propagate so cleanup
+        # and the per-thread lock release always run in ``finally``.
+        await queue.put(_stream_event("cancelled"))
+        raise
     except Exception as exc:
         _audit_log(
             "chat_failed",
@@ -274,6 +282,7 @@ async def utf8_json_response(request, call_next):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     thread_id: str = Field(default="", max_length=255)
+    regenerate: bool = False
 
 
 class Credentials(BaseModel):
@@ -526,6 +535,18 @@ async def remove_all_conversations(nba_session: str | None = Cookie(default=None
     return {"ok": True, "deleted": count}
 
 
+@app.post("/api/conversations/{thread_id}/cancel")
+async def cancel_chat_generation(thread_id: str, nba_session: str | None = Cookie(default=None)):
+    user = require_user(nba_session)
+    key = _chat_lock_key(user["id"], thread_id)
+    task = _active_chat_tasks.get(key)
+    if task is None or task.done():
+        return {"ok": True, "status": "not_running"}
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    return {"ok": True, "status": "cancelled"}
+
+
 @app.get("/api/debug/game-time/{game_id}")
 async def debug_game_time(game_id: str):
     result = await asyncio.to_thread(lookup_game_time_data.invoke, game_id)
@@ -561,7 +582,18 @@ async def chat(
     if not _try_acquire_chat_slot(user["id"], thread_id):
         raise HTTPException(status_code=409, detail="conversation_busy")
     try:
-        await asyncio.to_thread(append_message, int(user["id"]), thread_id, "user", message)
+        if payload.regenerate:
+            try:
+                existing_messages = await asyncio.to_thread(get_conversation_messages, int(user["id"]), thread_id)
+            except LookupError as exc:
+                _release_chat_slot(user["id"], thread_id)
+                raise HTTPException(status_code=404, detail="对话不存在") from exc
+            if not existing_messages or existing_messages[-1].get("role") != "user":
+                _release_chat_slot(user["id"], thread_id)
+                raise HTTPException(status_code=409, detail="regenerate_unavailable")
+            message = str(existing_messages[-1].get("content") or message)
+        else:
+            await asyncio.to_thread(append_message, int(user["id"]), thread_id, "user", message)
     except PermissionError as exc:
         _release_chat_slot(user["id"], thread_id)
         raise HTTPException(status_code=403, detail="无权访问该对话") from exc
@@ -590,7 +622,15 @@ async def chat(
         queue,
     ))
     _background_chat_tasks.add(task)
-    task.add_done_callback(_background_chat_tasks.discard)
+    task_key = _chat_lock_key(user["id"], thread_id)
+    _active_chat_tasks[task_key] = task
+
+    def forget_chat_task(done_task: asyncio.Task) -> None:
+        _background_chat_tasks.discard(done_task)
+        if _active_chat_tasks.get(task_key) is done_task:
+            _active_chat_tasks.pop(task_key, None)
+
+    task.add_done_callback(forget_chat_task)
 
     async def stream_response():
         while True:
