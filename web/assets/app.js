@@ -74,6 +74,7 @@ const state = {
   deletingThreadId: "",
   pendingRecoveryTimer: null,
   conversationRuntime: new Map(),
+  conversationLoadId: 0,
 };
 
 function threadStorageKey() {
@@ -384,24 +385,31 @@ function pollPendingMessage(threadId, article) {
   state.pendingRecoveryTimer = window.setTimeout(poll, 1500);
 }
 
-async function loadConversationMessages(threadId) {
+async function loadConversationMessages(threadId, loadId = null) {
   const response = await fetch(`/api/conversations/${encodeURIComponent(threadId)}`);
   if (!response.ok) throw new Error("无法加载该对话");
   const data = await response.json();
+  if (loadId !== null && (loadId !== state.conversationLoadId || state.threadId !== threadId)) return false;
   state.messages = data.messages || [];
   chat.replaceChildren();
   state.messages.forEach(({ role, content }) => addMessage(role, content, false));
   intro.hidden = state.messages.length > 0;
+  return true;
 }
 
 async function selectConversation(threadId) {
-  if (threadId === state.threadId) return;
   const selected = state.conversations.find((item) => item.id === threadId);
   if (!selected) return;
+  if (window.matchMedia("(max-width: 620px)").matches) {
+    setMobileSidebarOpen(false);
+  }
+  const loadId = ++state.conversationLoadId;
   state.threadId = selected.id;
   localStorage.setItem(threadStorageKey(), state.threadId);
+  renderConversationList();
   try {
-    await loadConversationMessages(threadId);
+    const loaded = await loadConversationMessages(threadId, loadId);
+    if (!loaded) return;
     recoverPendingMessage(threadId);
     updateComposerState();
     renderConversationList();
