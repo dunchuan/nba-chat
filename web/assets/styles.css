@@ -87,7 +87,7 @@ button { cursor: pointer; }
 .conversation-item { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 4px; padding: 9px 8px 9px 12px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--muted); text-align: left; }
 .conversation-item:hover { background: var(--accent-soft); color: var(--accent); }
 .conversation-item.active { border-color: #cddcf4; background: #e8f0ff; color: var(--accent); }
-.conversation-item-main { min-width: 0; display: grid; gap: 4px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; }
+.conversation-item-main { min-width: 0; display: grid; gap: 4px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; touch-action: manipulation; }
 .conversation-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 650; }
 .conversation-item-time { color: var(--muted); font-size: 12px; }
 .conversation-rename, .conversation-delete { width: 34px; height: 34px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: inherit; font-size: 21px; line-height: 1; opacity: 0; }

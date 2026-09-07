@@ -252,7 +252,12 @@ function renderConversationList() {
     selectButton.innerHTML = `<span class="conversation-item-title"></span><span class="conversation-item-time"></span>`;
     selectButton.querySelector(".conversation-item-title").textContent = conversation.title;
     selectButton.querySelector(".conversation-item-time").textContent = formatConversationTime(conversation.updatedAt);
-    selectButton.addEventListener("click", () => selectConversation(conversation.id));
+    selectButton.addEventListener("pointerup", (event) => {
+      // iOS Safari can delay or suppress the synthetic click after a touch.
+      // Handle the real pointer event so one tap always selects the thread.
+      event.preventDefault();
+      void selectConversation(conversation.id);
+    });
 
     const renameButton = document.createElement("button");
     renameButton.type = "button";
